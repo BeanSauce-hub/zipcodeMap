@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>佛罗里达州 ZIP 货量地图（手动导入·多月份·黄→红·折线图）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .legend { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
+    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size:12px; }
+    .panel {
+      position: absolute; z-index: 1000; left: 10px; top: 10px;
+      background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+    }
+    .panel h1 { font-size: 18px; margin: 0 0 6px; }
+    .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
+    .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
+    select{ padding:4px 8px; border-radius:8px; }
+    .drop { position:absolute; z-index:999; left:50%; top:50%; transform:translate(-50%,-50%); width:min(720px,90vw); padding:18px; border:2px dashed #888; border-radius:12px; background:rgba(255,255,255,.96); display:none; text-align:center;}
+    .drop h2{margin:0 0 6px;font-size:18px;} .drop p{margin:4px 0;font-size:13px;color:#555;}
+    .hint{font-size:12px;color:#666;margin-top:6px;}
+    .flash { animation: flash 1s ease-in-out 3; }
+    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); }
+    }
+    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
+    /* 迷你折线图 */
+    .sparkline { margin-top:6px; }
+    .sparkline text { font-size:10px; fill:#555; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>佛罗里达州 ZIP 货量地图</h1>
+
+    <div class="row">
+      <label>月份：
+        <select id="month">
+          <option value="5月">5月</option>
+          <option value="6月">6月</option>
+          <option value="7月">7月</option>
+          <option value="8月">8月</option>
+          <option value="9月">9月</option>
+        </select>
+      </label>
+      <a class="btn" id="pickCsv">选择月份 CSV</a>
+      <a class="btn" id="pickGeo">选择本地 GeoJSON</a>
+    </div>
+
+    <div class="row">
+      <input class="input" id="searchZip" placeholder="搜索 ZIP（支持前缀/完整）" maxlength="5" />
+      <a class="btn" id="doSearch">搜索</a>
+      <a class="btn" id="exportCsv">导出当前月份</a>
+    </div>
+
+    <div class="row">
+      <label>阈值高亮：<input class="input" style="width:100px" id="threshold" type="number" placeholder=">= 数值" /></label>
+      <label class="toggle"><input type="checkbox" id="thresholdOn" /> 启用</label>
+    </div>
+
+    <div class="row">
+      <label class="toggle"><input type="checkbox" id="showAll" checked /> 显示所有月份</label>
+      <label class="toggle"><input type="checkbox" id="hideMissing" checked /> 隐藏缺失月份</label>
+    </div>
+
+    <div class="hint">
+      先点击「选择本地 GeoJSON」加载边界（如 <code>fl_florida_zip_codes_geo.min.json</code>），再导入各月 CSV。<br/>
+      CSV 列名需包含：<b>Zipcodes</b> +（<b>pred_quantity</b> / <b>Quantity</b> / <b>数量</b> / <b>货量</b>）。
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="drop" id="drop">
+    <h2>将 CSV 或 GeoJSON 拖到这里</h2>
+    <p>支持拖入多个 CSV（不同月份）与一个 GeoJSON。</p>
+    <div class="hint">CSV 需含：Zipcodes +（pred_quantity / Quantity / 数量 / 货量）。</div>
+  </div>
+
+  <!-- 隐藏的文件选择器 -->
+  <input type="file" id="csvPicker" multiple accept=".csv" style="display:none" />
+  <input type="file" id="geoPicker" accept=".json,.geojson" style="display:none" />
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script>
+    // ---------- Utils ----------
+    const MONTHS_ORDER = ['5月','6月','7月','8月','9月'];
+
+    function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
+    function normZip(z){
+      let s = String(z ?? '').trim();
+      if (s.endsWith('.0')) s = s.slice(0,-2);
+      s = s.replace(/\\D/g,'');
+      if (s.length > 5) s = s.slice(0,5);
+      return s.padStart(5,'0');
+    }
+    function downloadText(filename, text){
+      const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+    function parseCsv(text){
+      const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
+      const rows = out.data.map(r=>{
+        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim()] = String(r[k] ?? '').trim(); });
+        return obj;
+      });
+      const headers = out.meta.fields || [];
+      return { headers, rows };
+    }
+
+    // 生成迷你折线图（SVG）：展示 5–9 月趋势并高亮当前月
+    function buildSparklineSVG(zip, currentMonth) {
+      // 整体 SVG 尺寸
+      const W = 220, H = 88;
+
+      // 左侧“文字边栏”宽度（只放上下限数值，不参与绘图）
+      const GUTTER_LEFT = 46;
+
+      // 绘图区的内边距
+      const PAD_X = 12;    // 绘图区左右 padding（不含左侧边栏）
+      const PAD_Y = 18;    // 绘图区上下 padding
+
+      // 绘图区的真实范围
+      const plotX0 = GUTTER_LEFT + PAD_X;
+      const plotX1 = W - PAD_X;
+      const plotW  = plotX1 - plotX0;
+
+      // 5–9 月横向分布
+      const xs = MONTHS_ORDER.map((_, i) => plotX0 + i * (plotW) / (MONTHS_ORDER.length - 1));
+
+      // 取值
+      const vals = MONTHS_ORDER.map(m => {
+        const v = monthly[m]?.[zip];
+        return (v == null || Number.isNaN(v)) ? null : Number(v);
+      });
+      const valid = vals.filter(v => v != null);
+      if (valid.length < 2) return "";
+
+      const minV  = Math.min(...valid), maxV = Math.max(...valid);
+      const span  = (maxV - minV) || 1;
+      const yScale = v => H - PAD_Y - ((v - minV) / span) * (H - 2 * PAD_Y);
+
+      // 计算点坐标
+      const points = vals.map((v, i) => v == null ? null : ({ x: xs[i], y: yScale(v) }));
+
+      // 折线路径（缺失断开）
+      let d = "";
+      for (let i = 0; i < vals.length; i++) {
+        const p = points[i]; if (!p) continue;
+        if (i === 0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+      }
+
+      // 点（当前月高亮）
+      const dots = points.map((p, i) => {
+        if (!p) return "";
+        const isCur = (MONTHS_ORDER[i] === currentMonth);
+        const r = isCur ? 4 : 3;
+        const stroke = isCur ? "#111" : "#555";
+        const fill = isCur ? "#ffd966" : "#fff";
+        return `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
+      }).join("");
+
+      // X 轴与月份刻度（只在绘图区内）
+      const xAxisY = H - PAD_Y;
+      const xLabels = MONTHS_ORDER.map((m, i) =>
+        `<text x="${xs[i]}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#555">${m.replace('月','')}</text>`
+      ).join("");
+
+      // 左侧边栏里的上下限文字（完全在绘图区外，不会和点重叠）
+      const minY = yScale(minV), maxY = yScale(maxV);
+      const yGuides = `
+        <!-- 参考线画在绘图区内 -->
+        <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
+        <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
+
+        <!-- 左侧边栏数值（固定在边栏内，避免裁切/重叠） -->
+        <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${fmt(maxV)}</text>
+        <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${fmt(minV)}</text>
+      `;
+
+      return `
+        <div class="sparkline">
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+            <!-- X 轴（绘图区） -->
+            <line x1="${plotX0}" y1="${xAxisY}" x2="${plotX1}" y2="${xAxisY}" stroke="#ccc"/>
+
+            ${yGuides}
+
+            <!-- 折线与数据点（绘图区） -->
+            <path d="${d}" fill="none" stroke="#d62728" stroke-width="2"/>
+            ${dots}
+
+            ${xLabels}
+          </svg>
+        </div>
+      `;
+    }
+
+    // 生成 Tooltip/Info HTML：可选显示所有月份 & 隐藏缺失月份，并高亮当前月 + 折线图
+    function buildTooltipHTML(zip, currentMonth) {
+      const showAll = document.getElementById('showAll').checked;
+      const hideMissing = document.getElementById('hideMissing').checked;
+
+      const months = showAll ? MONTHS_ORDER : [currentMonth];
+      const rows = months
+        .map(m => {
+          const v = monthly[m]?.[zip];
+          const has = v != null && !Number.isNaN(v);
+          if (!has && hideMissing && m !== currentMonth) return null; // 隐藏缺失但保留当前月
+          const val = has ? fmt(v) : '—';
+          const hlStyle = (m === currentMonth)
+            ? 'font-weight:700;background:rgba(255,230,150,.6);border-radius:4px;padding:0 4px;'
+            : '';
+          const valHtml = has ? `<b style="${hlStyle}">${val}</b>` : `<span style="${hlStyle||'color:#999'}">${val}</span>`;
+          return `<tr><td style="padding-right:8px">${m}</td><td>${valHtml}</td></tr>`;
+        })
+        .filter(Boolean)
+        .join('');
+
+      return `
+        <div><b>ZIP:</b> ${zip}</div>
+        <table class="tooltip-table" style="margin-top:4px">${rows}</table>
+        ${buildSparklineSVG(zip, currentMonth)}
+      `;
+    }
+
+    // ---------- Map ----------
+    let map = L.map('map').setView([27.8, -81.7], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
+
+    const info = L.control();
+    info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
+    info.update = function(props){
+      if (!props) { this._div.innerHTML = '将鼠标悬停到区域上查看数据'; return; }
+      const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
+      const cur = monthSel.value;
+      this._div.innerHTML = buildTooltipHTML(zip, cur);
+    };
+    info.addTo(map);
+
+    let geoLayer;
+    const layerByZip = {};
+    const monthSel = document.getElementById('month');
+    const csvPicker = document.getElementById('csvPicker');
+    const geoPicker = document.getElementById('geoPicker');
+    const pickCsvBtn = document.getElementById('pickCsv');
+    const pickGeoBtn = document.getElementById('pickGeo');
+    const searchInput = document.getElementById('searchZip');
+    const doSearch = document.getElementById('doSearch');
+    const exportCsv = document.getElementById('exportCsv');
+    const drop = document.getElementById('drop');
+
+    const monthly = { '5月':{}, '6月':{}, '7月':{}, '8月':{}, '9月':{} };
+    const breaks = {};
+    const thresholdOn = document.getElementById('thresholdOn');
+    const thresholdInput = document.getElementById('threshold');
+    const showAllChk = document.getElementById('showAll');
+    const hideMissingChk = document.getElementById('hideMissing');
+
+    function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
+
+    // 颜色梯度：低黄 → 中橙 → 高红
+    function getColor(d, b) {
+      if (d == null) return '#f2f2f2';
+      if (d <= b[0]) return '#ffffcc';
+      if (d <= b[1]) return '#ffeda0';
+      if (d <= b[2]) return '#feb24c';
+      if (d <= b[3]) return '#fd8d3c';
+      return '#e31a1c';
+    }
+
+    function overThreshold(val){
+      if (!thresholdOn.checked) return false;
+      const t = Number(thresholdInput.value);
+      if (!isFinite(t)) return false;
+      return (Number(val)||0) >= t;
+    }
+
+    function styleFeature(feature){
+      const z = getZipFromFeature(feature);
+      const m = monthSel.value;
+      const val = (monthly[m] && monthly[m][z]) ? monthly[m][z] : null;
+      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[m]||[0,0,0,0])};
+      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
+      return base;
+    }
+    function highlightFeature(e){
+      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
+      const z=getZipFromFeature(layer.feature);
+      info.update({ ZCTA5CE10:z });
+    }
+    function resetHighlight(e){ geoLayer.resetStyle(e.target); info.update(); }
+    function onEachFeature(feature,layer){
+      const z = getZipFromFeature(feature);
+      layerByZip[z] = layer;
+      layer.on({mouseover:highlightFeature, mouseout:resetHighlight, click:highlightFeature});
+      layer.bindTooltip(() => buildTooltipHTML(z, monthSel.value), { sticky: true });
+    }
+
+    function computeBreaks(values){
+      const vals = values.filter(v=>v>0 && isFinite(v)).sort((a,b)=>a-b);
+      if (!vals.length) return [0,0,0,0];
+      const q = p => vals[Math.floor(p*(vals.length-1))];
+      return [q(.2), q(.4), q(.6), q(.8)];
+    }
+    function updateBreaksFor(month){
+      const vals = Object.values(monthly[month]||{}).map(v=>+v||0);
+      breaks[month] = computeBreaks(vals);
+    }
+    function refreshMap(){
+      const m = monthSel.value;
+      updateBreaksFor(m);
+      if (geoLayer) geoLayer.setStyle(styleFeature);
+      legend.update();
+    }
+
+    const legend=L.control({position:'bottomright'});
+    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
+    legend.update=function(){
+      const m = monthSel.value; const b = breaks[m]||[0,0,0,0];
+      const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
+      const labels = [
+        `${fmt(0)} – ${fmt(b[0])}`,
+        `${fmt(b[0])} – ${fmt(b[1])}`,
+        `${fmt(b[1])} – ${fmt(b[2])}`,
+        `${fmt(b[2])} – ${fmt(b[3])}`,
+        `>${fmt(b[3])}`
+      ];
+      let html = '<b>颜色图例</b><br/>';
+      for (let i=0; i<labels.length; i++) {
+        html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
+      }
+      this._div.innerHTML = html;
+    };
+    legend.addTo(map);
+
+    // 交互刷新
+    monthSel.addEventListener('change', refreshMap);
+    thresholdOn.addEventListener('change', refreshMap);
+    thresholdInput.addEventListener('change', refreshMap);
+    showAllChk.addEventListener('change', ()=>{ info.update(info._lastProps); });
+    hideMissingChk.addEventListener('change', ()=>{ info.update(info._lastProps); });
+
+    // 记住最近一次传入 info.update 的 props（用于刷新开关时重绘）
+    const _origInfoUpdate = info.update.bind(info);
+    info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
+
+    // ---------- 仅手动导入 GeoJSON ----------
+    pickGeoBtn.addEventListener('click', ()=> geoPicker.click());
+    geoPicker.addEventListener('change', e=>{
+      const f = e.target.files[0]; if (!f) return;
+      const fr = new FileReader();
+      fr.onload = ()=>{
+        try{
+          const gj = JSON.parse(fr.result);
+          if (geoLayer) map.removeLayer(geoLayer);
+          geoLayer = L.geoJSON(gj, {style:styleFeature, onEachFeature:onEachFeature}).addTo(map);
+          map.fitBounds(geoLayer.getBounds());
+          refreshMap();
+        }catch(err){ alert('解析 GeoJSON 失败: ' + err); }
+      };
+      fr.readAsText(f);
+    });
+
+    // ---------- CSV 加载 ----------
+    document.getElementById('pickCsv').addEventListener('click', ()=> csvPicker.click());
+    csvPicker.addEventListener('change', e=> handleFiles(e.target.files));
+
+    ;['dragenter','dragover'].forEach(evt=>document.addEventListener(evt, e=>{
+      e.preventDefault(); e.stopPropagation(); drop.style.display='block';
+    }));
+    ;['dragleave','drop'].forEach(evt=>drop.addEventListener(evt, e=>{
+      e.preventDefault(); e.stopPropagation();
+    }));
+    drop.addEventListener('drop', e=>{
+      handleFiles(e.dataTransfer.files); drop.style.display='none';
+    });
+
+    function handleFiles(fileList){
+      const arr = Array.from(fileList);
+      arr.forEach(file=>{
+        const name = file.name.toLowerCase();
+        const fr = new FileReader();
+        fr.onload = ()=>{
+          if (name.endsWith('.csv')){
+            const {headers, rows} = parseCsv(fr.result);
+            const lowerHeaders = headers.map(h=>h?.trim().toLowerCase());
+
+            // ZIP 列
+            let zipKey = null;
+            for (const a of ['zipcodes','zip','zipcode','zip_code']){
+              const idx = lowerHeaders.indexOf(a);
+              if (idx!==-1){ zipKey = headers[idx]; break; }
+            }
+            if (!zipKey){ alert('未找到 ZIP 列（Zipcodes/ZIP/Zip/Zip_Code 等）'); return; }
+
+            // 数值列
+            let valKey = null;
+            for (const a of ['pred_quantity','quantity','数量','货量']){
+              const idx = lowerHeaders.indexOf(a);
+              if (idx!==-1){ valKey = headers[idx]; break; }
+            }
+            if (!valKey){ alert('未找到数值列（pred_quantity / Quantity / 数量 / 货量）'); return; }
+
+            // 推断月份
+            const m = inferMonthFromName(file.name) || guessMonthFromRows(rows);
+            if (!m){ alert('无法识别月份：请在文件名包含 5/6/7/8/9月 或 05/06/07/08/09/May/Jun/Jul/Aug/Sep'); return; }
+
+            monthly[m] = {};
+
+            rows.forEach(r=>{
+              const z = normZip(r[zipKey]);
+              const v = Number(r[valKey]||0);
+              monthly[m][z] = isFinite(v) ? v : 0;
+            });
+            refreshMap();
+          } else if (name.endsWith('.json') || name.endsWith('.geojson')){
+            // 支持把 GeoJSON 直接拖入
+            try{
+              const gj = JSON.parse(fr.result);
+              if (geoLayer) map.removeLayer(geoLayer);
+              geoLayer = L.geoJSON(gj, {style:styleFeature, onEachFeature:onEachFeature}).addTo(map);
+              map.fitBounds(geoLayer.getBounds());
+              refreshMap();
+            }catch(err){ alert('解析 GeoJSON 失败: ' + err); }
+          }
+        };
+        fr.readAsText(file);
+      });
+    }
+
+    function inferMonthFromName(name){
+      const n = name.replace(/\\s/g,'').toLowerCase();
+      if (/(^|[^\\d])(05|5月|may)([^\\d]|$)/i.test(n)) return '5月';
+      if (/(^|[^\\d])(06|6月|jun)([^\\d]|$)/i.test(n)) return '6月';
+      if (/(^|[^\\d])(07|7月|jul)([^\\d]|$)/i.test(n)) return '7月';
+      if (/(^|[^\\d])(08|8月|aug)([^\\d]|$)/i.test(n)) return '8月';
+      if (/(^|[^\\d])(09|9月|sep)([^\\d]|$)/i.test(n)) return '9月';
+      return null;
+    }
+    function guessMonthFromRows(rows){
+      if (!rows.length) return null;
+      for (const r of rows.slice(0,20)){
+        for (const [k,v] of Object.entries(r)){
+          const s = String(v||'').toLowerCase();
+          if (/\\bmay\\b|五月/.test(s)) return '5月';
+          if (/\\bjun(e)?\\b|六月/.test(s)) return '6月';
+          if (/\\bjul(y)?\\b|七月/.test(s)) return '7月';
+          if (/\\baug(ust)?\\b|八月/.test(s)) return '8月';
+          if (/\\bsep(t)?\\b|九月/.test(s)) return '9月';
+          const m = s.match(/-(0[5-9])-/); if (m){ return ({'05':'5月','06':'6月','07':'7月','08':'8月','09':'9月'})[m[1]]; }
+        }
+      }
+      return null;
+    }
+
+    // Search & Export
+    function focusZip(query){
+      if (!geoLayer) { alert('请先加载 GeoJSON。'); return; }
+      const q = (query||'').trim(); if (!q) return;
+      const target = Object.keys(layerByZip).find(z => z.startsWith(q));
+      if (!target) { alert('未找到匹配的 ZIP。'); return; }
+      const layer = layerByZip[target];
+      map.fitBounds(layer.getBounds(), {maxZoom: 10});
+      const el = layer.getElement();
+      if (el){ el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
+      layer.openTooltip();
+    }
+    doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
+    searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
+
+    function exportCurrent(){
+      const m = monthSel.value;
+      const obj = monthly[m] || {};
+      const rows = Object.entries(obj).map(([zip, val]) => `${zip},${val}`);
+      const csv = ['Zipcodes,pred_quantity', ...rows].join('\\n');
+      downloadText(`${m}预测_导出.csv`, csv);
+    }
+    exportCsv.addEventListener('click', exportCurrent);
+  </script>
+</body>
+</html>
