@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="utf-8" />
-  <title>佛州货量地图</title>
+  <title>佛州货量地图（按天 / 自动枚举仓库 CSV）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -32,14 +32,13 @@
 </head>
 <body>
   <div class="panel">
-    <h1>佛罗里达州 ZIP 货量地图</h1>
+    <h1>佛罗里达州 ZIP 货量地图（按天）</h1>
 
     <div class="row">
       <label>日期：
         <select id="day"></select>
       </label>
-      <a class="btn" id="loadLocal">从根目录（index.json）加载</a>
-      <a class="btn" id="pickCsv">选择每日 CSV</a>
+      <a class="btn" id="reload">从仓库自动刷新</a>
       <a class="btn" id="pickGeo">选择本地 GeoJSON</a>
     </div>
 
@@ -55,26 +54,26 @@
     </div>
 
     <div class="hint">
-      - 本页会读取根目录的 <code>index.json</code> 与 <code>YYYY-MM-DD.csv</code> 文件。<br>
-      - CSV 列：<b>Zipcodes</b> +（<b>Quantity</b> / <b>pred_quantity</b> / <b>数量</b> / <b>货量</b>）。文件名需 <code>YYYY-MM-DD.csv</code>。
+      - 页面会调用 GitHub API 枚举仓库根目录下的 <code>YYYY-MM-DD.csv</code>，自动生成日期列表。<br>
+      - CSV 列：<b>Zipcodes</b> +（<b>Quantity</b> / <b>pred_quantity</b> / <b>数量</b> / <b>货量</b>）。<br>
+      - 默认自动加载同目录的 <code>fl_florida_zip_codes_geo.min.json</code>，也可手动选择 GeoJSON。
     </div>
   </div>
 
   <div id="map"></div>
 
-  <div class="drop" id="drop">
-    <h2>将每日 CSV 或 GeoJSON 拖到这里</h2>
-    <p>支持拖入多个 CSV（不同日期）与一个 GeoJSON。</p>
-    <div class="hint">CSV 需含：Zipcodes +（Quantity / pred_quantity / 数量 / 货量）。</div>
-  </div>
-
   <!-- 隐藏的文件选择器 -->
-  <input type="file" id="csvPicker" multiple accept=".csv" style="display:none" />
   <input type="file" id="geoPicker" accept=".json,.geojson" style="display:none" />
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
+    // ------------------- 这里改成你的仓库信息 -------------------
+    const GH_OWNER  = 'BeanSauce-hub';
+    const GH_REPO   = 'zipcodeMap';
+    const GH_BRANCH = 'main';
+    // -----------------------------------------------------------
+
     // ---------- 工具 ----------
     function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
     function normZip(z){
@@ -119,7 +118,7 @@
       return out;
     }
 
-    // ---------- 迷你折线图：只显示 5/10/15/20/25/30；每月1号显示“月-1”；缺失日期断开 ----------
+    // ---------- 迷你折线图（只显示 5/10/15/20/25/30, 每月1号显示“月-1”；缺失断开） ----------
     function buildSparklineSVG(zip, currentDay, daysList, N = 14) {
       const days = sortDatesAsc(daysList);
       if (!days.length) return "";
@@ -226,12 +225,10 @@
     let geoLayer;
     const layerByZip = {};
     const daySel = document.getElementById('day');
-    const csvPicker = document.getElementById('csvPicker');
     const geoPicker = document.getElementById('geoPicker');
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
     const exportCsv = document.getElementById('exportCsv');
-    const drop = document.getElementById('drop');
 
     const daily = {};     // { 'YYYY-MM-DD': { 'zip': value } }
     let daysList = [];    // ['2025-08-11', ...]
@@ -321,7 +318,7 @@
     const _origInfoUpdate = info.update.bind(info);
     info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
 
-    // 渲染 GeoJSON（自动加载同目录的 fl_florida_zip_codes_geo.min.json）
+    // 渲染 GeoJSON（优先同目录文件，失败可手动选择）
     (async function autoLoadLocalGeo(){
       try {
         const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
@@ -337,13 +334,26 @@
       refreshMap();
     }
 
-    // -------- 从根目录自动加载（index.json + 多个 YYYY-MM-DD.csv）--------
-    async function fetchIndexJson() {
-      const r = await fetch('./index.json?ts=' + Date.now(), {cache:'no-store'});
-      if (!r.ok) throw new Error(`读取 index.json 失败：${r.status}`);
-      return r.json();
+    // ---------- 从 GitHub API 枚举 CSV，生成日期并逐日加载 ----------
+    async function fetchCsvDatesFromGitHub() {
+      const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
+      const r = await fetch(api, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+      const data = await r.json();
+      const dates = (data.tree || [])
+        .filter(n => n.type === 'blob' && /\.csv$/i.test(n.path))
+        .map(n => {
+          // 只取根目录形如 YYYY-MM-DD.csv
+          const m = n.path.match(/^(\d{4}-\d{2}-\d{2})\.csv$/i);
+          return m ? m[1] : null;
+        })
+        .filter(Boolean)
+        .sort((a,b)=> a.localeCompare(b));
+      return dates;
     }
+
     async function fetchDayCsv(dayISO){
+      // Pages 下用相对路径即可（同域缓存好）；也可改为 raw.githubusercontent.com
       const r = await fetch(`./${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
       if (!r.ok) throw new Error(`读取 ${dayISO}.csv 失败：${r.status}`);
       const text = await r.text();
@@ -368,13 +378,14 @@
         if (z && z!=='00000') daily[dayISO][z] = v;
       });
     }
-    async function loadAllFromLocal(){
+
+    async function loadAllFromRepo(){
       try{
-        const idx = await fetchIndexJson();
-        const list = sortDatesAsc(idx?.dates || []);
-        if (!list.length){ alert("index.json 中没有 dates，请检查文件"); return; }
+        daySel.disabled = true;
+        const list = await fetchCsvDatesFromGitHub();
+        if (!list.length){ alert('仓库里没找到 YYYY-MM-DD.csv'); return; }
         daysList = [];
-        for (const d of list){
+        for (const d of list) {
           await fetchDayCsv(d);
           daysList.push(d);
         }
@@ -382,82 +393,10 @@
         refreshMap();
       }catch(e){
         console.error(e);
-        alert("从根目录加载失败：" + e.message);
+        alert('从仓库自动加载失败：' + e.message);
+      }finally{
+        daySel.disabled = false;
       }
-    }
-
-    // -------- 手动选择/拖拽（保留）--------
-    document.getElementById('pickGeo').addEventListener('click', ()=> geoPicker.click());
-    geoPicker.addEventListener('change', e=>{
-      const f = e.target.files[0]; if (!f) return;
-      const fr = new FileReader();
-      fr.onload = ()=>{ try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('解析 GeoJSON 失败: '+err); } };
-      fr.readAsText(f);
-    });
-
-    document.getElementById('pickCsv').addEventListener('click', ()=> csvPicker.click());
-    csvPicker.addEventListener('change', e=> handleFiles(e.target.files));
-
-    ['dragenter','dragover'].forEach(evt=>document.addEventListener(evt, e=>{
-      e.preventDefault(); e.stopPropagation(); drop.style.display='block';
-    }));
-    ['dragleave','drop'].forEach(evt=>drop.addEventListener(evt, e=>{
-      e.preventDefault(); e.stopPropagation();
-    }));
-    drop.addEventListener('drop', e=>{
-      handleFiles(e.dataTransfer.files); drop.style.display='none';
-    });
-
-    function handleFiles(fileList){
-      const arr = Array.from(fileList);
-      arr.forEach(file=>{
-        const name = file.name.toLowerCase();
-        const fr = new FileReader();
-        fr.onload = ()=>{
-          if (name.endsWith('.csv')){
-            const {headers, rows} = parseCsv(fr.result);
-            const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
-
-            let zipKey = null, valKey = null;
-            for (const a of ['zipcodes','zip','zipcode','zip_code']){
-              const idx = lowerHeaders.indexOf(a);
-              if (idx!==-1){ zipKey = headers[idx]; break; }
-            }
-            for (const a of ['quantity','pred_quantity','数量','货量']){
-              const idx = lowerHeaders.indexOf(a);
-              if (idx!==-1){ valKey = headers[idx]; break; }
-            }
-            if (!zipKey || !valKey){ alert('未找到 ZIP/数量 列'); return; }
-
-            // 推断日期：优先文件名 YYYY-MM-DD
-            let d = (name.match(/(\d{4})-(\d{2})-(\d{2})/) || [])[0];
-            if (!d){
-              const idx = lowerHeaders.indexOf('date');
-              if (idx !== -1 && rows[0]) {
-                const col = headers[idx];
-                const vv = rows[0][col];
-                const mm = String(vv||'').match(/(\d{4})[-_\/\.](\d{2})[-_\/\.](\d{2})/);
-                if (mm) d = `${mm[1]}-${mm[2]}-${mm[3]}`;
-              }
-            }
-            if (!d){ alert('无法识别日期：请用 YYYY-MM-DD.csv 命名，或提供 date 列'); return; }
-
-            daily[d] = {};
-            rows.forEach(r=>{
-              const z = normZip(r[zipKey]);
-              const v = Number(String(r[valKey]).replace(/,/g,'')) || 0;
-              if (z && z!=='00000') daily[d][z] = v;
-            });
-
-            daysList = sortDatesAsc(uniq([...daysList, d]));
-            renderDayOptions();
-            refreshMap();
-          } else if (name.endsWith('.json') || name.endsWith('.geojson')){
-            try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('解析 GeoJSON 失败: '+err); }
-          }
-        };
-        fr.readAsText(file);
-      });
     }
 
     function renderDayOptions(){
@@ -486,7 +425,7 @@
       if (el){ el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
       layer.openTooltip();
     }
-    document.getElementById('doSearch').addEventListener('click', ()=> focusZip(searchInput.value));
+    doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
     searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
 
     function exportCurrent(){
@@ -503,14 +442,21 @@
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
 
-    // 按钮：从根目录加载
-    document.getElementById('loadLocal').addEventListener('click', loadAllFromLocal);
+    // 手动选 GeoJSON
+    document.getElementById('pickGeo').addEventListener('click', ()=> geoPicker.click());
+    geoPicker.addEventListener('change', e=>{
+      const f = e.target.files[0]; if (!f) return;
+      const fr = new FileReader();
+      fr.onload = ()=>{ try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('解析 GeoJSON 失败: '+err); } };
+      fr.readAsText(f);
+    });
 
-    // 页面加载后自动从根目录读取
+    // 按钮：从仓库自动刷新
+    document.getElementById('reload').addEventListener('click', loadAllFromRepo);
+
+    // 页面加载后即自动读取
     document.addEventListener('DOMContentLoaded', () => {
-      loadAllFromLocal().catch(e => {
-        console.warn('首次加载 index.json 失败（可能不存在）：', e);
-      });
+      loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
     });
   </script>
 </body>
