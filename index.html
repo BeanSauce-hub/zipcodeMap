@@ -97,7 +97,7 @@
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
     // ---------- 迷你折线图（Y 轴 0 起、留白、多留左右边距、缺失断开） ----------
-    function buildSparklineSVG(zip, currentDay, daysList, N = 14) {
+    function buildSparklineSVG(zip, currentDay, daysList, N = 30) {
       const days = sortDatesAsc(daysList);
       if (!days.length) return "";
 
