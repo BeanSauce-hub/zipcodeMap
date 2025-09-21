@@ -442,18 +442,6 @@
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
 
-    // 手动选 GeoJSON
-    document.getElementById('pickGeo').addEventListener('click', ()=> geoPicker.click());
-    geoPicker.addEventListener('change', e=>{
-      const f = e.target.files[0]; if (!f) return;
-      const fr = new FileReader();
-      fr.onload = ()=>{ try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('解析 GeoJSON 失败: '+err); } };
-      fr.readAsText(f);
-    });
-
-    // 按钮：从仓库自动刷新
-    document.getElementById('reload').addEventListener('click', loadAllFromRepo);
-
     // 页面加载后即自动读取
     document.addEventListener('DOMContentLoaded', () => {
       loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
