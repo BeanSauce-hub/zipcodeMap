@@ -1,494 +1,143 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="utf-8" />
-  <title>佛州货量地图</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    html, body, #map { height: 100%; margin: 0; }
-    .legend { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
-    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size:12px; }
-    .panel {
-      position: absolute; z-index: 1000; left: 10px; top: 10px;
-      background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
-      max-width: 540px;
+function buildSparklineSVG(zip, currentDay, daysList) {
+  const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
+  const allDays = sortDatesAsc(daysList);
+  if (!allDays.length) return "";
+
+  // UTC 日期工具
+  const addDaysUTC = (iso, n) => {
+    const [y,m,d] = iso.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m-1, d + n));
+    return dt.toISOString().slice(0,10);
+  };
+  const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
+
+  // 结束日（若当前不在列表，则用最后一天）
+  const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
+
+  // 窗口跨度
+  const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
+
+  // 连续日期序列
+  let fullDays;
+  if (span) {
+    const start = addDaysUTC(endDay, -(span - 1));
+    fullDays = rangeDaysUTC(start, endDay);
+  } else {
+    fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
+  }
+
+  // 数值序列（缺失为 null）
+  const vals = fullDays.map(d => {
+    const v = daily[d]?.[zip];
+    return (v == null || Number.isNaN(v)) ? null : Number(v);
+  });
+
+  const valid = vals.filter(v => v != null);
+  if (valid.length < 2) return "";
+
+  // y 轴：从 0 起、顶部留 5%
+  const minV = 0;
+  const maxData = Math.max(...valid, 0);
+  const maxV = maxData * 1.05 || 1;
+
+  // 画布与绘图区（右侧额外留 6px 防裁切）
+  const W = 300, H = 100;
+  const GUTTER_LEFT = 56;  // 左侧刻度栏
+  const PAD_X = 14, PAD_Y = 18;
+  const plotX0 = GUTTER_LEFT + PAD_X;
+  const plotX1 = W - PAD_X - 6;
+  const plotW  = plotX1 - plotX0;
+
+  const xs = fullDays.map((_, i) =>
+    plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
+  );
+  const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
+
+  // 折线（缺失断开；不画圆点）
+  const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
+  let d = "";
+  for (let i=0;i<points.length;i++){
+    const p = points[i]; if (!p) continue;
+    if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+  }
+
+  // ---------- 刻度候选（优先级：月初 > 常规） ----------
+  const candidates = [];
+  for (let i=0; i<fullDays.length; i++) {
+    const iso = fullDays[i];
+    const day = parseInt(iso.slice(8,10), 10);
+    const mon = parseInt(iso.slice(5,7), 10);
+    const isMonthStart = (day === 1);
+    let need = false;
+
+    if (mode === '1W') {
+      need = true;                              // 1W 全部候选
+    } else if (mode === '1M') {
+      need = isMonthStart || (day % 5 === 0);   // 月初 + 每 5 天
+    } else { // MAX
+      need = isMonthStart;                      // 只要月初
     }
-    .panel h1 { font-size: 18px; margin: 0 0 6px; }
-    .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
-    .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
-    select{ padding:4px 8px; border-radius:8px; }
-    .hint{font-size:12px;color:#666;margin-top:6px;}
-    .flash { animation: flash 1s ease-in-out 3; }
-    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
-    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
 
-    /* 时间窗口按钮组 */
-    .btnseg { display:inline-flex; gap:6px; }
-    .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
-    .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
+    if (need) {
+      // ✅ 月初用 M/1，其余只显示“日”
+      const label = isMonthStart ? `${mon}/1` : `${day}`;
+      const prio  = isMonthStart ? 2 : 1;
+      candidates.push({ i, x: xs[i], label, prio });
+    }
+  }
 
-    /* 迷你折线图（Tooltip 内） */
-    .sparkline { margin-top:6px; }
-    .sparkline text { font-size:10px; fill:#555; }
-    .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
-  </style>
-</head>
-<body>
-  <div class="panel">
-    <h1>佛罗里达州 ZIP 货量地图</h1>
+  // ---------- 最小像素间距过滤，避免 30 与 9/1 贴太近 ----------
+  const MIN_GAP = (mode === '1W') ? 0 : (mode === '1M') ? 22 : 28;
 
-    <div class="row">
-      <label>日期：
-        <select id="day"></select>
-      </label>
-      <div class="btnseg" id="rangeBtns">
-        <button class="seg" id="btn1w">1W</button>
-        <button class="seg" id="btn1m">1M</button>
-        <button class="seg" id="btnMax">MAX</button>
-      </div>
+  const kept = [];
+  const take = (cand) => {
+    for (const k of kept) {
+      if (Math.abs(cand.x - k.x) < MIN_GAP) return false;
+    }
+    kept.push(cand);
+    return true;
+  };
+
+  // 先放月初（高优），后放常规
+  candidates.filter(c=>c.prio===2).forEach(c => take(c));
+  candidates.filter(c=>c.prio===1).forEach(c => take(c));
+  kept.sort((a,b)=>a.i - b.i);
+
+  // MAX 进一步稀疏（最多 8 个）
+  if (mode === 'MAX' && kept.length > 8) {
+    const step = Math.ceil(kept.length / 8);
+    const slim = [];
+    for (let i=0;i<kept.length;i+=step) slim.push(kept[i]);
+    kept.length = 0; kept.push(...slim);
+  }
+
+  // 可选：交替上下错位，缓解密集处重叠（1W 通常不需要）
+  const STAGGER = (mode !== '1W');
+  let alt = 0;
+  const xLabels = kept.map(k => {
+    const dy = STAGGER ? (alt++ % 2 ? -6 : 0) : 0;
+    return `<text x="${k.x}" y="${H-4+dy}" text-anchor="middle" font-size="10" fill="#555">${k.label}</text>`;
+  }).join("");
+
+  // 参考线 + min/max（min 固定 0）
+  const minY = yScale(minV), maxY = yScale(maxData);
+  const guides = `
+    <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
+    <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
+    <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
+          style="paint-order: stroke; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
+    <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
+          style="paint-order: stroke; stroke-width: 3px;" fill="#666">0</text>
+  `;
+
+  return `
+    <div class="sparkline">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+        <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
+        ${guides}
+        <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${xLabels}
+      </svg>
     </div>
-
-    <div class="row">
-      <input class="input" id="searchZip" placeholder="搜索 ZIP（支持前缀/完整）" maxlength="5" />
-      <a class="btn" id="doSearch">搜索</a>
-      <a class="btn" id="exportCsv">导出当日明细</a>
-    </div>
-
-    <div class="row">
-      <label>阈值高亮：<input class="input" style="width:100px" id="threshold" type="number" placeholder=">= 数值" /></label>
-      <label class="toggle"><input type="checkbox" id="thresholdOn" /> 启用</label>
-    </div>
-
-    <div class="hint">
-      - 自动列出仓库根目录的 <code>YYYY-MM-DD.csv</code>；CSV 需含：<b>Zipcodes</b> +（<b>Quantity</b> / <b>pred_quantity</b> / <b>数量</b> / <b>货量</b>）。<br>
-      - 默认加载本地 <code>fl_florida_zip_codes_geo.min.json</code>。
-    </div>
-  </div>
-
-  <div id="map"></div>
-
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <script>
-    // ====== 配置你的仓库信息 ======
-    const GH_OWNER  = 'BeanSauce-hub';
-    const GH_REPO   = 'zipcodeMap';
-    const GH_BRANCH = 'main';
-    // ==============================
-
-    // ---------- 全局状态 ----------
-    let windowMode = '1W'; // 默认一周 1W
-    const daily = {};      // { 'YYYY-MM-DD': { 'zip': value } }
-    let daysList = [];     // ['2025-08-11', ...]
-    const breaks = {};     // { day: [q20,q40,q60,q80] }
-
-    // ---------- Utils ----------
-    function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
-    function normZip(z){
-      let s = String(z ?? '').trim();
-      if (s.endsWith('.0')) s = s.slice(0,-2);
-      s = s.replace(/\D/g,'');
-      if (s.length > 5) s = s.slice(0,5);
-      return s.padStart(5,'0');
-    }
-    function downloadText(filename, text){
-      const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-    }
-    function parseCsv(text){
-      const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
-      const rows = out.data.map(r=>{
-        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim?.()] = String(r[k] ?? '').trim(); });
-        return obj;
-      });
-      const headers = out.meta.fields || [];
-      return { headers, rows };
-    }
-    function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
-
-    // ---------- 迷你折线图 ----------
-    function buildSparklineSVG(zip, currentDay, daysList) {
-      const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
-      const allDays = sortDatesAsc(daysList);
-      if (!allDays.length) return "";
-
-      // UTC 日期工具
-      const addDaysUTC = (iso, n) => {
-        const [y,m,d] = iso.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, m-1, d + n));
-        return dt.toISOString().slice(0,10);
-      };
-      const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
-
-      // 结束日
-      const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
-
-      // 窗口跨度
-      const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
-
-      // 连续日期序列
-      let fullDays;
-      if (span) {
-        const start = addDaysUTC(endDay, -(span - 1));
-        fullDays = rangeDaysUTC(start, endDay);
-      } else {
-        fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
-      }
-
-      const vals = fullDays.map(d => {
-        const v = daily[d]?.[zip];
-        return (v == null || Number.isNaN(v)) ? null : Number(v);
-      });
-
-      const valid = vals.filter(v => v != null);
-      if (valid.length < 2) return "";
-
-      // y 轴：从 0 起，顶部留 5%
-      const minV = 0;
-      const maxData = Math.max(...valid, 0);
-      const maxV = maxData * 1.05 || 1;
-
-      // 画布与绘图区
-      const W = 300, H = 100;
-      const GUTTER_LEFT = 56;
-      const PAD_X = 14, PAD_Y = 18;
-      const plotX0 = GUTTER_LEFT + PAD_X;
-      const plotX1 = W - PAD_X - 6;
-      const plotW  = plotX1 - plotX0;
-
-      const xs = fullDays.map((_, i) =>
-        plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
-      );
-      const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
-
-      // 折线（缺失断开；不画圆点）
-      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-      let d = "";
-      for (let i=0;i<points.length;i++){
-        const p = points[i]; if (!p) continue;
-        if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
-      }
-
-      // X 轴标签策略
-      const wantLabelIdx = [];
-      if (mode === '1W') {
-        for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
-      } else if (mode === '1M') {
-        for (let i=0; i<fullDays.length; i++) {
-          const day = parseInt(fullDays[i].slice(8,10), 10);
-          if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
-        }
-      } else { // MAX
-        for (let i=0; i<fullDays.length; i++) {
-          const day = parseInt(fullDays[i].slice(8,10), 10);
-          if (day === 1) wantLabelIdx.push(i);
-        }
-        // 稀疏到最多 8 个
-        const MAX_TICKS = 8;
-        if (wantLabelIdx.length > MAX_TICKS) {
-          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
-          const slim = [];
-          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
-          wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
-        }
-      }
-
-      const fmtTick = (iso) => {
-        const m = parseInt(iso.slice(5,7), 10);
-        const d = parseInt(iso.slice(8,10), 10);
-        if (d === 1) return `${m}-1`;
-        return `${d}`;
-      };
-      const xLabels = wantLabelIdx.map(i =>
-        `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
-      ).join("");
-
-      // 参考线 + min/max（min 固定 0）
-      const minY = yScale(minV), maxY = yScale(maxData);
-      const guides = `
-        <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
-        <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
-        <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
-        <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
-      `;
-
-      return `
-        <div class="sparkline">
-          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-            <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
-            ${guides}
-            <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            ${xLabels}
-          </svg>
-        </div>
-      `;
-    }
-
-    function buildTooltipHTML(zip, currentDay) {
-      const val = daily[currentDay]?.[zip];
-      const valHtml = (val == null || Number.isNaN(val)) ? '<span style="color:#999">—</span>' : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
-      const trend = buildSparklineSVG(zip, currentDay, Object.keys(daily));
-      return `
-        <div><b>ZIP:</b> ${zip}</div>
-        <div style="margin-top:4px"><b>${currentDay}</b>：${valHtml}</div>
-        ${trend}
-      `;
-    }
-
-    // ---------- Map ----------
-    const map = L.map('map').setView([27.8, -81.7], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
-    map.zoomControl.setPosition('bottomleft');
-
-    const info = L.control();
-    info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
-    info.update = function(props){
-      if (!props) { this._div.innerHTML = '将鼠标悬停到区域上查看数据'; return; }
-      const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
-      const cur = daySel.value;
-      this._div.innerHTML = buildTooltipHTML(zip, cur);
-    };
-    info.addTo(map);
-
-    let geoLayer;
-    const layerByZip = {};
-    const daySel = document.getElementById('day');
-    const searchInput = document.getElementById('searchZip');
-    const doSearch = document.getElementById('doSearch');
-    const exportCsv = document.getElementById('exportCsv');
-
-    const thresholdOn = document.getElementById('thresholdOn');
-    const thresholdInput = document.getElementById('threshold');
-
-    function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
-
-    function getColor(d, b) {
-      if (d == null) return '#f2f2f2';
-      if (d <= b[0]) return '#ffffcc';
-      if (d <= b[1]) return '#ffeda0';
-      if (d <= b[2]) return '#feb24c';
-      if (d <= b[3]) return '#fd8d3c';
-      return '#e31a1c';
-    }
-    function overThreshold(val){
-      if (!thresholdOn.checked) return false;
-      const t = Number(thresholdInput.value);
-      if (!isFinite(t)) return false;
-      return (Number(val)||0) >= t;
-    }
-
-    function styleFeature(feature){
-      const z = getZipFromFeature(feature);
-      const d = daySel.value;
-      const val = (daily[d] && daily[d][z] != null) ? daily[d][z] : null;
-      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
-      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
-      return base;
-    }
-    function highlightFeature(e){
-      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
-      const z=getZipFromFeature(layer.feature);
-      info.update({ ZCTA5CE10:z });
-    }
-    function resetHighlight(e){ geoLayer.resetStyle(e.target); info.update(); }
-    function onEachFeature(feature,layer){
-      const z = getZipFromFeature(feature);
-      layerByZip[z] = layer;
-      layer.on({mouseover:highlightFeature, mouseout:resetHighlight, click:highlightFeature});
-      layer.bindTooltip(() => buildTooltipHTML(z, daySel.value), { sticky: true });
-    }
-
-    function computeBreaks(values){
-      const vals = values.filter(v=>v>0 && isFinite(v)).sort((a,b)=>a-b);
-      if (!vals.length) return [0,0,0,0];
-      const q = p => vals[Math.floor(p*(vals.length-1))];
-      return [q(.2), q(.4), q(.6), q(.8)];
-    }
-    function updateBreaksFor(day){
-      const vals = Object.values(daily[day]||{}).map(v=>+v||0);
-      breaks[day] = computeBreaks(vals);
-    }
-    function refreshMap(){
-      const d = daySel.value;
-      if (!d || !geoLayer) return;
-      updateBreaksFor(d);
-      geoLayer.setStyle(styleFeature);
-      legend.update();
-      info.update(info._lastProps);
-    }
-
-    const legend=L.control({position:'bottomright'});
-    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
-    legend.update=function(){
-      const d = daySel.value; const b = breaks[d]||[0,0,0,0];
-      const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
-      const labels = [
-        `${fmt(0)} – ${fmt(b[0])}`,
-        `${fmt(b[0])} – ${fmt(b[1])}`,
-        `${fmt(b[1])} – ${fmt(b[2])}`,
-        `${fmt(b[2])} – ${fmt(b[3])}`,
-        `>${fmt(b[3])}`
-      ];
-      let html = '<b>颜色图例</b><br/>';
-      for (let i=0; i<labels.length; i++) {
-        html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
-      }
-      this._div.innerHTML = html;
-    };
-    legend.addTo(map);
-
-    // 记住最近一次 props
-    const _origInfoUpdate = info.update.bind(info);
-    info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
-
-    // 自动加载 GeoJSON
-    (async function autoLoadLocalGeo(){
-      try {
-        const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
-        if (!r.ok) throw new Error('HTTP '+r.status);
-        const gj = await r.json();
-        renderGeo(gj);
-      } catch (e) { console.warn('自动加载本地 GeoJSON 失败：', e); }
-    })();
-    function renderGeo(geojson){
-      if (geoLayer) map.removeLayer(geoLayer);
-      geoLayer = L.geoJSON(geojson, { style: styleFeature, onEachFeature: onEachFeature }).addTo(map);
-      map.fitBounds(geoLayer.getBounds());
-      refreshMap();
-    }
-
-    // ---------- GitHub API 枚举 CSV ----------
-    async function fetchCsvDatesFromGitHub() {
-      const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
-      const r = await fetch(api, { cache: 'no-store' });
-      if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-      const data = await r.json();
-      const dates = (data.tree || [])
-        .filter(n => n.type === 'blob' && /\.csv$/i.test(n.path))
-        .map(n => {
-          const m = n.path.match(/^(\d{4}-\d{2}-\d{2})\.csv$/i); // 根目录
-          return m ? m[1] : null;
-        })
-        .filter(Boolean)
-        .sort((a,b)=> a.localeCompare(b));
-      return dates;
-    }
-
-    async function fetchDayCsv(dayISO){
-      const r = await fetch(`./${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
-      if (!r.ok) throw new Error(`读取 ${dayISO}.csv 失败：${r.status}`);
-      const text = await r.text();
-      const { headers, rows } = parseCsv(text);
-      const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
-
-      let zipKey=null, valKey=null;
-      for (const a of ['zipcodes','zip','zipcode','zip_code']){
-        const idx = lowerHeaders.indexOf(a);
-        if (idx!==-1){ zipKey = headers[idx]; break; }
-      }
-      for (const a of ['quantity','pred_quantity','数量','货量']){
-        const idx = lowerHeaders.indexOf(a);
-        if (idx!==-1){ valKey = headers[idx]; break; }
-      }
-      if (!zipKey || !valKey) throw new Error("CSV 缺少 Zipcodes 或 数量列");
-
-      daily[dayISO] = {};
-      rows.forEach(r=>{
-        const z = normZip(r[zipKey]);
-        const v = Number(String(r[valKey]).replace(/,/g,'')) || 0;
-        if (z && z!=='00000') daily[dayISO][z] = v;
-      });
-    }
-
-    async function loadAllFromRepo(){
-      try{
-        daySel.disabled = true;
-        const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){ alert('仓库里没找到 YYYY-MM-DD.csv'); return; }
-        daysList = [];
-        for (const d of list) {
-          await fetchDayCsv(d);
-          daysList.push(d);
-        }
-        renderDayOptions();
-        refreshMap();
-      }catch(e){
-        console.error(e);
-        alert('从仓库加载失败：' + e.message);
-      }finally{
-        daySel.disabled = false;
-      }
-    }
-
-    function renderDayOptions(){
-      const sel = daySel;
-      const cur = sel.value;
-      sel.innerHTML = '';
-      daysList.forEach(d=>{
-        const opt = document.createElement('option');
-        opt.value = d; opt.textContent = d;
-        sel.appendChild(opt);
-      });
-      if (daysList.length){
-        sel.value = daysList.includes(cur) ? cur : daysList[daysList.length-1];
-      }
-    }
-
-    // Search & Export
-    function focusZip(query){
-      if (!geoLayer) { alert('请先加载地图。'); return; }
-      const q = (query||'').trim(); if (!q) return;
-      const target = Object.keys(layerByZip).find(z => z.startsWith(q));
-      if (!target) { alert('未找到匹配的 ZIP。'); return; }
-      const layer = layerByZip[target];
-      map.fitBounds(layer.getBounds(), {maxZoom: 10});
-      const el = layer.getElement();
-      if (el){ el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
-      layer.openTooltip();
-    }
-    doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
-    searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
-
-    function exportCurrent(){
-      const d = daySel.value;
-      const obj = daily[d] || {};
-      const rows = Object.entries(obj).map(([zip, val]) => `${zip},${val}`);
-      const csv = ['Zipcodes,Quantity', ...rows].join('\n');
-      downloadText(`${d}_导出.csv`, csv);
-    }
-    exportCsv.addEventListener('click', exportCurrent);
-
-    // 交互刷新
-    daySel.addEventListener('change', refreshMap);
-    thresholdOn.addEventListener('change', refreshMap);
-    thresholdInput.addEventListener('change', refreshMap);
-
-    // 1W / 1M / MAX 切换
-    const btn1w = document.getElementById('btn1w');
-    const btn1m = document.getElementById('btn1m');
-    const btnMax= document.getElementById('btnMax');
-
-    function syncRangeButtons(){
-      btn1w.classList.toggle('active', windowMode==='1W');
-      btn1m.classList.toggle('active', windowMode==='1M');
-      btnMax.classList.toggle('active', windowMode==='MAX');
-    }
-    btn1w.addEventListener('click', ()=>{ windowMode='1W'; syncRangeButtons(); refreshMap(); });
-    btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
-    btnMax.addEventListener('click',()=>{ windowMode='MAX';syncRangeButtons(); refreshMap(); });
-
-    // 页面加载后即自动读取（并把按钮同步到 1W）
-    document.addEventListener('DOMContentLoaded', async () => {
-      syncRangeButtons();
-      await loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
-    });
-  </script>
-</body>
-</html>
+  `;
+}
