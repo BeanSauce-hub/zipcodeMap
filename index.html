@@ -116,7 +116,7 @@
       const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
       const allDays = sortDatesAsc(daysList);
       if (!allDays.length) return "";
-    
+
       // UTC 日期工具
       const addDaysUTC = (iso, n) => {
         const [y,m,d] = iso.split('-').map(Number);
@@ -124,13 +124,13 @@
         return dt.toISOString().slice(0,10);
       };
       const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
-    
-      // 结束日（若当前不在列表，则用最后一天）
+
+      // 结束日
       const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
-    
+
       // 窗口跨度
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
-    
+
       // 连续日期序列
       let fullDays;
       if (span) {
@@ -139,34 +139,33 @@
       } else {
         fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
       }
-    
-      // 数值序列（缺失为 null）
+
       const vals = fullDays.map(d => {
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-    
+
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
-    
-      // y 轴：从 0 起、顶部留 5%
+
+      // y 轴：从 0 起，顶部留 5%
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
-    
-      // 画布与绘图区（右侧额外留 6px 防裁切）
+
+      // 画布与绘图区
       const W = 300, H = 100;
-      const GUTTER_LEFT = 56;  // 左侧刻度栏
+      const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
       const plotX0 = GUTTER_LEFT + PAD_X;
       const plotX1 = W - PAD_X - 6;
       const plotW  = plotX1 - plotX0;
-    
+
       const xs = fullDays.map((_, i) =>
         plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
       );
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
-    
+
       // 折线（缺失断开；不画圆点）
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
       let d = "";
@@ -174,76 +173,52 @@
         const p = points[i]; if (!p) continue;
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
-    
-      // ---------- 刻度候选（优先级：月初 > 常规） ----------
-      const candidates = [];
-      for (let i=0; i<fullDays.length; i++) {
-        const iso = fullDays[i];
-        const day = parseInt(iso.slice(8,10), 10);
-        const mon = parseInt(iso.slice(5,7), 10);
-        const isMonthStart = (day === 1);
-        let need = false;
-    
-        if (mode === '1W') {
-          need = true;                              // 1W 全部候选
-        } else if (mode === '1M') {
-          need = isMonthStart || (day % 5 === 0);   // 月初 + 每 5 天
-        } else { // MAX
-          need = isMonthStart;                      // 只要月初
+
+      // X 轴标签策略
+      const wantLabelIdx = [];
+      if (mode === '1W') {
+        for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
+      } else if (mode === '1M') {
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
         }
-    
-        if (need) {
-          // ✅ 月初用 M/1，其余只显示“日”
-          const label = isMonthStart ? `${mon}/1` : `${day}`;
-          const prio  = isMonthStart ? 2 : 1;
-          candidates.push({ i, x: xs[i], label, prio });
+      } else { // MAX
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1) wantLabelIdx.push(i);
+        }
+        // 稀疏到最多 8 个
+        const MAX_TICKS = 8;
+        if (wantLabelIdx.length > MAX_TICKS) {
+          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
+          const slim = [];
+          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
+          wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
         }
       }
-    
-      // ---------- 最小像素间距过滤，避免 30 与 9/1 贴太近 ----------
-      const MIN_GAP = (mode === '1W') ? 0 : (mode === '1M') ? 22 : 28;
-    
-      const kept = [];
-      const take = (cand) => {
-        for (const k of kept) {
-          if (Math.abs(cand.x - k.x) < MIN_GAP) return false;
-        }
-        kept.push(cand);
-        return true;
+
+      const fmtTick = (iso) => {
+        const m = parseInt(iso.slice(5,7), 10);
+        const d = parseInt(iso.slice(8,10), 10);
+        if (d === 1) return `${m}-1`;
+        return `${d}`;
       };
-    
-      // 先放月初（高优），后放常规
-      candidates.filter(c=>c.prio===2).forEach(c => take(c));
-      candidates.filter(c=>c.prio===1).forEach(c => take(c));
-      kept.sort((a,b)=>a.i - b.i);
-    
-      // MAX 进一步稀疏（最多 8 个）
-      if (mode === 'MAX' && kept.length > 8) {
-        const step = Math.ceil(kept.length / 8);
-        const slim = [];
-        for (let i=0;i<kept.length;i+=step) slim.push(kept[i]);
-        kept.length = 0; kept.push(...slim);
-      }
-    
-      // 可选：交替上下错位，缓解密集处重叠（1W 通常不需要）
-      const STAGGER = (mode !== '1W');
-      let alt = 0;
-      const xLabels = kept.map(k => {
-        const dy = STAGGER ? (alt++ % 2 ? -6 : 0) : 0;
-        return `<text x="${k.x}" y="${H-4+dy}" text-anchor="middle" font-size="10" fill="#555">${k.label}</text>`;
-      }).join("");
-    
+      const xLabels = wantLabelIdx.map(i =>
+        `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
+      ).join("");
+
       // 参考线 + min/max（min 固定 0）
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
         <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
         <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke-width: 3px;" fill="#666">0</text>
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
       `;
-    
+
       return `
         <div class="sparkline">
           <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
@@ -256,6 +231,16 @@
       `;
     }
 
+    function buildTooltipHTML(zip, currentDay) {
+      const val = daily[currentDay]?.[zip];
+      const valHtml = (val == null || Number.isNaN(val)) ? '<span style="color:#999">—</span>' : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
+      const trend = buildSparklineSVG(zip, currentDay, Object.keys(daily));
+      return `
+        <div><b>ZIP:</b> ${zip}</div>
+        <div style="margin-top:4px"><b>${currentDay}</b>：${valHtml}</div>
+        ${trend}
+      `;
+    }
 
     // ---------- Map ----------
     const map = L.map('map').setView([27.8, -81.7], 6);
