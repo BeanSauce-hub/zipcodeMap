@@ -25,12 +25,10 @@
     @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
     .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
 
-    /* 时间窗口按钮组 */
     .btnseg { display:inline-flex; gap:6px; }
     .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
     .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
 
-    /* 迷你折线图（Tooltip 内） */
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
     .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
@@ -211,7 +209,7 @@
         <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
               style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
+              style="paint-order: stroke; stroke-width: 3px; stroke: #fff;" fill="#666">0</text>
       `;
 
       return `
@@ -343,7 +341,7 @@
     const _origInfoUpdate = info.update.bind(info);
     info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
 
-    // 自动加载 GeoJSON
+    // 自动加载 GeoJSON（本地文件）
     (async function autoLoadLocalGeo(){
       try {
         const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
@@ -359,26 +357,23 @@
       refreshMap();
     }
 
-    // ---------- GitHub API 枚举 CSV ----------
+    // ---------- GitHub API 枚举 CSV（仅 data/ 目录） ----------
     async function fetchCsvDatesFromGitHub() {
       const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
       const r = await fetch(api, { cache: 'no-store' });
       if (!r.ok) throw new Error(`GitHub API ${r.status}`);
       const data = await r.json();
       const dates = (data.tree || [])
-        .filter(n => n.type === 'blob' && /\.csv$/i.test(n.path))
-        .map(n => {
-          const m = n.path.match(/^(\d{4}-\d{2}-\d{2})\.csv$/i); // 根目录
-          return m ? m[1] : null;
-        })
-        .filter(Boolean)
+        .filter(n => n.type === 'blob' && /^data\/\d{4}-\d{2}-\d{2}\.csv$/i.test(n.path))
+        .map(n => n.path.replace(/^data\//, '').replace(/\.csv$/i, ''))
         .sort((a,b)=> a.localeCompare(b));
       return dates;
     }
 
+    // 从 data/ 加载单日 CSV
     async function fetchDayCsv(dayISO){
-      const r = await fetch(`./${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
-      if (!r.ok) throw new Error(`读取 ${dayISO}.csv 失败：${r.status}`);
+      const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
+      if (!r.ok) throw new Error(`读取 data/${dayISO}.csv 失败：${r.status}`);
       const text = await r.text();
       const { headers, rows } = parseCsv(text);
       const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
@@ -406,7 +401,7 @@
       try{
         daySel.disabled = true;
         const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){ alert('仓库里没找到 YYYY-MM-DD.csv'); return; }
+        if (!list.length){ alert('data/ 目录里没找到 YYYY-MM-DD.csv'); return; }
         daysList = [];
         for (const d of list) {
           await fetchDayCsv(d);
@@ -477,9 +472,9 @@
     }
     btn1w.addEventListener('click', ()=>{ windowMode='1W'; syncRangeButtons(); refreshMap(); });
     btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
-    btnMax.addEventListener('click',()=>{ windowMode='MAX';syncRangeButtons(); refreshMap(); });
+    btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
 
-    // 页面加载后即自动读取（并把按钮同步到 1W）
+    // 页面加载后自动拉取 data/ 目录下的 CSV 列表
     document.addEventListener('DOMContentLoaded', async () => {
       syncRangeButtons();
       await loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
