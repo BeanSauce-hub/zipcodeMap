@@ -111,60 +111,95 @@
     const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b) break; cur=addDaysUTC(cur,1);} return out; };
 
     // ---------- 迷你折线图 ----------
-    function buildSparklineSVG(zip, currentDay, allDays, windowSpec) {
-      let fullDays;
-      if (windowSpec === 'max') {
-        const ds = allDays && allDays.length ? allDays.slice().sort((a,b)=>a.localeCompare(b)) : Object.keys(daily).sort();
-        const earliest = ds[0] || currentDay;
-        fullDays = rangeDaysUTC(earliest, currentDay);
-      } else {
-        const startISO = addDaysUTC(currentDay, -(Number(windowSpec)-1));
-        fullDays = rangeDaysUTC(startISO, currentDay);
-      }
-
+    function buildSparklineSVG(zip, currentDay, daysList, NDefault = 14) {
+      const days = sortDatesAsc(daysList);
+      if (!days.length) return "";
+    
+      // 使用当前窗口大小（1W/1M/MAX），默认回退到 NDefault
+      const win = (typeof windowSpec === 'number' && windowSpec > 0) ? windowSpec : NDefault;
+    
+      const endIdx   = Math.max(days.indexOf(currentDay), days.length - 1);
+      const startIdx = Math.max(0, endIdx - (win - 1));
+      const segLoaded = days.slice(startIdx, endIdx + 1);
+      if (!segLoaded.length) return "";
+    
+      // 连续 UTC 日期序列（把缺失日期补上）
+      const addDaysUTC = (iso, n) => {
+        const [y, m, d] = iso.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d + n));
+        return dt.toISOString().slice(0, 10);
+      };
+      const rangeDaysUTC = (a, b) => { const out = []; let cur = a; while (true) { out.push(cur); if (cur === b) break; cur = addDaysUTC(cur, 1); } return out; };
+    
+      const fullDays = rangeDaysUTC(segLoaded[0], segLoaded[segLoaded.length - 1]);
+    
+      // 拉值（缺失为 null）
       const vals = fullDays.map(d => {
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-
+    
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
-
+    
+      // y 轴从 0 起，上方留 5%
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
-
+    
+      // 画布布局（右侧多留 6px 防裁切）
       const W = 300, H = 100;
-      const GUTTER_LEFT = 56, PAD_X = 14, PAD_Y = 18;
-      const plotX0 = GUTTER_LEFT + PAD_X, plotX1 = W - PAD_X - 6, plotW = plotX1 - plotX0;
-
-      const xs = fullDays.map((_, i) => plotX0 + (i * plotW / Math.max(1, fullDays.length - 1)));
-      const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
-
-      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-
+      const GUTTER_LEFT = 56;
+      const PAD_X = 14, PAD_Y = 18;
+      const plotX0 = GUTTER_LEFT + PAD_X;
+      const plotX1 = W - PAD_X - 6;
+      const plotW  = plotX1 - plotX0;
+    
+      const xs = fullDays.map((_, i) =>
+        plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
+      );
+    
+      const yScale = v =>
+        H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
+    
+      const points = vals.map((v, i) => v == null ? null : ({ x: xs[i], y: yScale(v) }));
+    
+      // 折线（缺失断开）
       let d = "";
-      for (let i=0;i<points.length;i++){
+      for (let i = 0; i < points.length; i++) {
         const p = points[i]; if (!p) continue;
-        if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+        if (i === 0 || !points[i - 1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
-      const dots = points.map((p,i)=>{
-        if(!p) return "";
-        const isCur = (fullDays[i]===currentDay);
+    
+      // 节点（当前日高亮）
+      const dots = points.map((p, i) => {
+        if (!p) return "";
+        const isCur = (fullDays[i] === currentDay);
         const r = isCur ? 4 : 3;
         const stroke = isCur ? "#111" : "#555";
         const fill = isCur ? "#ffd966" : "#fff";
         return `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
       }).join("");
-
-      const xLabels = fullDays.map((iso,i)=>{
-        const day = parseInt(iso.slice(8,10), 10);
-        const mon = parseInt(iso.slice(5,7), 10);
-        if (day === 1) return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${mon}-1</text>`;
+    
+      // === X 轴刻度：1W 显示每天，其它模式保留“1号+每5天” ===
+      const xLabels = fullDays.map((iso, i) => {
+        const day = parseInt(iso.slice(8, 10), 10);
+        const mon = parseInt(iso.slice(5, 7), 10);
+    
+        if (win === 7) {
+          // 1W 模式：每天都显示（MM-DD）
+          return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${iso.slice(5)}</text>`;
+        }
+    
+        // 其它模式：1 号显示“月-1”，其余每 5 天一个
+        if (day === 1) {
+          return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${mon}-1</text>`;
+        }
         if (day % 5 !== 0) return "";
         return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${day}</text>`;
       }).join("");
-
+    
+      // 参考线 + min/max（min 固定 0）
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -172,9 +207,9 @@
         <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
               style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke-width: 3px;" fill="#666">0</text>
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
       `;
-
+    
       return `
         <div class="sparkline">
           <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
@@ -187,6 +222,7 @@
         </div>
       `;
     }
+
 
     function buildTooltipHTML(zip, currentDay) {
       const val = daily[currentDay]?.[zip];
