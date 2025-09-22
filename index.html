@@ -111,14 +111,14 @@
     function buildSparklineSVG(zip, currentDay, allDays) {
       const days = sortDatesAsc(allDays);
       if (!days.length) return "";
-
+    
       // 窗口大小：0 表示 MAX
       const win = (typeof windowSpec === 'number' && windowSpec >= 0) ? windowSpec : 14;
       const endIdx   = Math.max(days.indexOf(currentDay), days.length - 1);
       const startIdx = (win === 0) ? 0 : Math.max(0, endIdx - (win - 1));
       const segLoaded = days.slice(startIdx, endIdx + 1);
       if (!segLoaded.length) return "";
-
+    
       // 连续 UTC 日期（补缺失）
       const addDaysUTC = (iso, n) => {
         const [y, m, d] = iso.split('-').map(Number);
@@ -127,20 +127,20 @@
       };
       const rangeDaysUTC = (a, b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
       const fullDays = rangeDaysUTC(segLoaded[0], segLoaded[segLoaded.length - 1]);
-
+    
       const vals = fullDays.map(d => {
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-
+    
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
-
+    
       // y: 0 起、顶部留 5%
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
-
+    
       // 画布
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
@@ -148,36 +148,33 @@
       const plotX0 = GUTTER_LEFT + PAD_X;
       const plotX1 = W - PAD_X - 6;
       const plotW  = plotX1 - plotX0;
-
+    
       const xs = fullDays.map((_, i) =>
         plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
       );
-
+    
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-
+    
       // 折线（缺失断开）
       let d = "";
       for (let i=0;i<points.length;i++){
         const p = points[i]; if (!p) continue;
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
-
-      // 节点（当前日高亮）
-      const dots = points.map((p,i)=>{
-        if(!p) return "";
-        const isCur = (fullDays[i]===currentDay);
-        const r = isCur ? 4 : 3;
-        const stroke = isCur ? "#111" : "#555";
-        const fill = isCur ? "#ffd966" : "#fff";
-        return `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
-      }).join("");
-
-      // X 轴文字：1W => 每日 MM-DD；其它 => 1号显示“月-1”，其余每 5 天一个
+    
+      // 仅绘制“当前日”的高亮点
+      let dot = "";
+      const curIdx = fullDays.indexOf(currentDay);
+      if (curIdx >= 0 && points[curIdx]) {
+        const p = points[curIdx];
+        dot = `<circle cx="${p.x}" cy="${p.y}" r="4" fill="#ffd966" stroke="#111" stroke-width="1.2"/>`;
+      }
+    
+      // X 轴文字
       const xLabels = fullDays.map((iso,i)=>{
         const day = parseInt(iso.slice(8,10), 10);
         const mon = parseInt(iso.slice(5,7), 10);
-
         if (win === 7) {
           return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${iso.slice(5)}</text>`;
         }
@@ -187,8 +184,8 @@
         if (day % 5 !== 0) return "";
         return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${day}</text>`;
       }).join("");
-
-      // 参考线 + min/max（min 固定 0）
+    
+      // 参考线 + min/max
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -198,19 +195,20 @@
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
               style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
       `;
-
+    
       return `
         <div class="sparkline">
           <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
             <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
             ${guides}
             <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            ${dots}
+            ${dot}
             ${xLabels}
           </svg>
         </div>
       `;
     }
+
 
     function buildTooltipHTML(zip, currentDay) {
       const val = daily[currentDay]?.[zip];
