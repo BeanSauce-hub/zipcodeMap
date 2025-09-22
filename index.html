@@ -13,16 +13,24 @@
       position: absolute; z-index: 1000; left: 10px; top: 10px;
       background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+      max-width: 540px;
     }
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
     .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#f2f2f2; color:#111; text-decoration:none; cursor:pointer; font-size:12px; border:1px solid #ddd; }
-    .win-btn.active { background:#111; color:#fff; }
+    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
     .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
     select{ padding:4px 8px; border-radius:8px; }
     .hint{font-size:12px;color:#666;margin-top:6px;}
     .flash { animation: flash 1s ease-in-out 3; }
     @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
+    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
+
+    /* 时间窗口按钮组 */
+    .btnseg { display:inline-flex; gap:6px; }
+    .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
+    .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
+
+    /* 迷你折线图（Tooltip 内） */
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
     .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
@@ -36,11 +44,11 @@
       <label>日期：
         <select id="day"></select>
       </label>
-
-      <!-- 时间窗口按钮 -->
-      <button id="btn1w"  class="btn win-btn" data-win="7">1W</button>
-      <button id="btn1m"  class="btn win-btn" data-win="30">1M</button>
-      <button id="btnMax" class="btn win-btn" data-win="0">MAX</button>
+      <div class="btnseg" id="rangeBtns">
+        <button class="seg" id="btn1w">1W</button>
+        <button class="seg" id="btn1m">1M</button>
+        <button class="seg" id="btnMax">MAX</button>
+      </div>
     </div>
 
     <div class="row">
@@ -51,9 +59,7 @@
 
     <div class="row">
       <label>阈值高亮：<input class="input" style="width:100px" id="threshold" type="number" placeholder=">= 数值" /></label>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
-        <input type="checkbox" id="thresholdOn" /> 启用
-      </label>
+      <label class="toggle"><input type="checkbox" id="thresholdOn" /> 启用</label>
     </div>
 
     <div class="hint">
@@ -72,6 +78,12 @@
     const GH_REPO   = 'zipcodeMap';
     const GH_BRANCH = 'main';
     // ==============================
+
+    // ---------- 全局状态 ----------
+    let windowMode = '1W'; // 默认一周 1W
+    const daily = {};      // { 'YYYY-MM-DD': { 'zip': value } }
+    let daysList = [];     // ['2025-08-11', ...]
+    const breaks = {};     // { day: [q20,q40,q60,q80] }
 
     // ---------- Utils ----------
     function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
@@ -99,93 +111,104 @@
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
-    // ========== 全局数据 ==========
-    const daily = {};   // { 'YYYY-MM-DD': { 'zip': value } }
-    let daysList = [];  // ['2025-08-11', ...]
-    const breaks = {};  // { day: [q20,q40,q60,q80] }
-
-    // 时间窗口（7=1W，30=1M，0=MAX）
-    let windowSpec = 7; // 默认 1W
-
     // ---------- 迷你折线图 ----------
-    function buildSparklineSVG(zip, currentDay, allDays) {
-      const days = sortDatesAsc(allDays);
-      if (!days.length) return "";
-    
-      // 窗口大小：0 表示 MAX
-      const win = (typeof windowSpec === 'number' && windowSpec >= 0) ? windowSpec : 14;
-      const endIdx   = Math.max(days.indexOf(currentDay), days.length - 1);
-      const startIdx = (win === 0) ? 0 : Math.max(0, endIdx - (win - 1));
-      const segLoaded = days.slice(startIdx, endIdx + 1);
-      if (!segLoaded.length) return "";
-    
-      // 连续 UTC 日期（补缺失）
+    function buildSparklineSVG(zip, currentDay, daysList) {
+      const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
+      const allDays = sortDatesAsc(daysList);
+      if (!allDays.length) return "";
+
+      // UTC 日期工具
       const addDaysUTC = (iso, n) => {
-        const [y, m, d] = iso.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, m - 1, d + n));
-        return dt.toISOString().slice(0, 10);
+        const [y,m,d] = iso.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m-1, d + n));
+        return dt.toISOString().slice(0,10);
       };
-      const rangeDaysUTC = (a, b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
-      const fullDays = rangeDaysUTC(segLoaded[0], segLoaded[segLoaded.length - 1]);
-    
+      const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
+
+      // 结束日
+      const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
+
+      // 窗口跨度
+      const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
+
+      // 连续日期序列
+      let fullDays;
+      if (span) {
+        const start = addDaysUTC(endDay, -(span - 1));
+        fullDays = rangeDaysUTC(start, endDay);
+      } else {
+        fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
+      }
+
       const vals = fullDays.map(d => {
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-    
+
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
-    
-      // y: 0 起、顶部留 5%
+
+      // y 轴：从 0 起，顶部留 5%
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
-    
-      // 画布
+
+      // 画布与绘图区
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
       const plotX0 = GUTTER_LEFT + PAD_X;
       const plotX1 = W - PAD_X - 6;
       const plotW  = plotX1 - plotX0;
-    
+
       const xs = fullDays.map((_, i) =>
         plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
       );
-    
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
+
+      // 折线（缺失断开；不画圆点）
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-    
-      // 折线（缺失断开）
       let d = "";
       for (let i=0;i<points.length;i++){
         const p = points[i]; if (!p) continue;
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
-    
-      // 仅绘制“当前日”的高亮点
-      let dot = "";
-      const curIdx = fullDays.indexOf(currentDay);
-      if (curIdx >= 0 && points[curIdx]) {
-        const p = points[curIdx];
-        dot = `<circle cx="${p.x}" cy="${p.y}" r="4" fill="#ffd966" stroke="#111" stroke-width="1.2"/>`;
+
+      // X 轴标签策略
+      const wantLabelIdx = [];
+      if (mode === '1W') {
+        for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
+      } else if (mode === '1M') {
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
+        }
+      } else { // MAX
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1) wantLabelIdx.push(i);
+        }
+        // 稀疏到最多 8 个
+        const MAX_TICKS = 8;
+        if (wantLabelIdx.length > MAX_TICKS) {
+          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
+          const slim = [];
+          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
+          wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
+        }
       }
-    
-      // X 轴文字
-      const xLabels = fullDays.map((iso,i)=>{
-        const day = parseInt(iso.slice(8,10), 10);
-        const mon = parseInt(iso.slice(5,7), 10);
-        if (win === 7) {
-          return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${iso.slice(5)}</text>`;
-        }
-        if (day === 1) {
-          return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${mon}-1</text>`;
-        }
-        if (day % 5 !== 0) return "";
-        return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${day}</text>`;
-      }).join("");
-    
-      // 参考线 + min/max
+
+      const fmtTick = (iso) => {
+        const m = parseInt(iso.slice(5,7), 10);
+        const d = parseInt(iso.slice(8,10), 10);
+        if (d === 1) return `${m}-1`;
+        return `${d}`;
+      };
+      const xLabels = wantLabelIdx.map(i =>
+        `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
+      ).join("");
+
+      // 参考线 + min/max（min 固定 0）
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -195,20 +218,18 @@
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
               style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">0</text>
       `;
-    
+
       return `
         <div class="sparkline">
           <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
             <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
             ${guides}
             <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            ${dot}
             ${xLabels}
           </svg>
         </div>
       `;
     }
-
 
     function buildTooltipHTML(zip, currentDay) {
       const val = daily[currentDay]?.[zip];
@@ -242,6 +263,7 @@
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
     const exportCsv = document.getElementById('exportCsv');
+
     const thresholdOn = document.getElementById('thresholdOn');
     const thresholdInput = document.getElementById('threshold');
 
@@ -326,7 +348,7 @@
     const _origInfoUpdate = info.update.bind(info);
     info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
 
-    // 自动加载 GeoJSON（本地文件）
+    // 自动加载 GeoJSON
     (async function autoLoadLocalGeo(){
       try {
         const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
@@ -351,7 +373,7 @@
       const dates = (data.tree || [])
         .filter(n => n.type === 'blob' && /\.csv$/i.test(n.path))
         .map(n => {
-          const m = n.path.match(/^(\d{4}-\d{2}-\d{2})\.csv$/i);
+          const m = n.path.match(/^(\d{4}-\d{2}-\d{2})\.csv$/i); // 根目录
           return m ? m[1] : null;
         })
         .filter(Boolean)
@@ -399,7 +421,7 @@
         refreshMap();
       }catch(e){
         console.error(e);
-        alert('从仓库自动加载失败：' + e.message);
+        alert('从仓库加载失败：' + e.message);
       }finally{
         daySel.disabled = false;
       }
@@ -419,9 +441,9 @@
       }
     }
 
-    // 搜索 & 导出
+    // Search & Export
     function focusZip(query){
-      if (!geoLayer) { alert('请先加载 GeoJSON。'); return; }
+      if (!geoLayer) { alert('请先加载地图。'); return; }
       const q = (query||'').trim(); if (!q) return;
       const target = Object.keys(layerByZip).find(z => z.startsWith(q));
       if (!target) { alert('未找到匹配的 ZIP。'); return; }
@@ -448,24 +470,24 @@
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
 
-    // ====== 窗口切换与默认高亮 ======
-    function setWindowSpec(n) {
-      windowSpec = n;
-      document.querySelectorAll('.win-btn').forEach(btn => {
-        const win = Number(btn.dataset.win);
-        btn.classList.toggle('active', win === n);
-      });
-      refreshMap();
-      info.update(info._lastProps);
-    }
-    document.getElementById('btn1w').addEventListener('click',  () => setWindowSpec(7));
-    document.getElementById('btn1m').addEventListener('click',  () => setWindowSpec(30));
-    document.getElementById('btnMax').addEventListener('click', () => setWindowSpec(0));
+    // 1W / 1M / MAX 切换
+    const btn1w = document.getElementById('btn1w');
+    const btn1m = document.getElementById('btn1m');
+    const btnMax= document.getElementById('btnMax');
 
-    // 页面加载后：先设为 1W（高亮 + windowSpec=7），再拉取数据
-    document.addEventListener('DOMContentLoaded', () => {
-      setWindowSpec(7);      // ✅ 默认 1W
-      loadAllFromRepo();     // 加载 CSV（根目录）
+    function syncRangeButtons(){
+      btn1w.classList.toggle('active', windowMode==='1W');
+      btn1m.classList.toggle('active', windowMode==='1M');
+      btnMax.classList.toggle('active', windowMode==='MAX');
+    }
+    btn1w.addEventListener('click', ()=>{ windowMode='1W'; syncRangeButtons(); refreshMap(); });
+    btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
+    btnMax.addEventListener('click',()=>{ windowMode='MAX';syncRangeButtons(); refreshMap(); });
+
+    // 页面加载后即自动读取（并把按钮同步到 1W）
+    document.addEventListener('DOMContentLoaded', async () => {
+      syncRangeButtons();
+      await loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
     });
   </script>
 </body>
