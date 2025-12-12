@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>佛州货量地图</title>
+  <title>Florida ZIP Volume Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -36,10 +36,10 @@
 </head>
 <body>
   <div class="panel">
-    <h1>佛罗里达州 ZIP 货量地图</h1>
+    <h1>Florida ZIP Volume Map</h1>
 
     <div class="row">
-      <label>日期：
+      <label>Date:
         <select id="day"></select>
       </label>
       <div class="btnseg" id="rangeBtns">
@@ -50,14 +50,16 @@
     </div>
 
     <div class="row">
-      <input class="input" id="searchZip" placeholder="搜索 ZIP（支持前缀/完整）" maxlength="5" />
-      <a class="btn" id="doSearch">搜索</a>
-      <a class="btn" id="exportCsv">导出当日明细</a>
+      <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
+      <a class="btn" id="doSearch">Search</a>
+      <a class="btn" id="exportCsv">Export daily CSV</a>
     </div>
 
     <div class="row">
-      <label>阈值高亮：<input class="input" style="width:100px" id="threshold" type="number" placeholder=">= 数值" /></label>
-      <label class="toggle"><input type="checkbox" id="thresholdOn" /> 启用</label>
+      <label>Threshold highlight:
+        <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
+      </label>
+      <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
     </div>
   </div>
 
@@ -66,14 +68,14 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
-    // ====== 配置你的仓库信息 ======
+    // ====== Configure your GitHub repository here ======
     const GH_OWNER  = 'BeanSauce-hub';
     const GH_REPO   = 'zipcodeMap';
     const GH_BRANCH = 'main';
-    // ==============================
+    // ===================================================
 
-    // ---------- 全局状态 ----------
-    let windowMode = '1W'; // 默认一周 1W
+    // ---------- Global state ----------
+    let windowMode = '1W'; // default to 1-week window
     const daily = {};      // { 'YYYY-MM-DD': { 'zip': value } }
     let daysList = [];     // ['2025-08-11', ...]
     const breaks = {};     // { day: [q20,q40,q60,q80] }
@@ -104,13 +106,13 @@
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
-    // ---------- 迷你折线图 ----------
+    // ---------- Mini sparkline chart ----------
     function buildSparklineSVG(zip, currentDay, daysList) {
       const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
       const allDays = sortDatesAsc(daysList);
       if (!allDays.length) return "";
 
-      // UTC 日期工具
+      // UTC date helpers
       const addDaysUTC = (iso, n) => {
         const [y,m,d] = iso.split('-').map(Number);
         const dt = new Date(Date.UTC(y, m-1, d + n));
@@ -118,13 +120,13 @@
       };
       const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
 
-      // 结束日
+      // End date
       const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
 
-      // 窗口跨度
+      // Window span
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
 
-      // 连续日期序列
+      // Continuous date sequence
       let fullDays;
       if (span) {
         const start = addDaysUTC(endDay, -(span - 1));
@@ -141,12 +143,12 @@
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
 
-      // y 轴：从 0 起，顶部留 5%
+      // y-axis: start at 0, keep 5% headroom
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
 
-      // 画布与绘图区
+      // Canvas and plot area
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
@@ -159,7 +161,7 @@
       );
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
 
-      // 折线（缺失断开；不画圆点）
+      // Line (break on missing; no dots)
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
       let d = "";
       for (let i=0;i<points.length;i++){
@@ -167,7 +169,7 @@
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
 
-      // X 轴标签策略
+      // X-axis tick strategy
       const wantLabelIdx = [];
       if (mode === '1W') {
         for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
@@ -181,7 +183,7 @@
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1) wantLabelIdx.push(i);
         }
-        // 稀疏到最多 8 个
+        // thin to max 8 ticks
         const MAX_TICKS = 8;
         if (wantLabelIdx.length > MAX_TICKS) {
           const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
@@ -201,7 +203,7 @@
         `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
       ).join("");
 
-      // 参考线 + min/max（min 固定 0）
+      // Reference lines + min/max labels (min fixed at 0)
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -226,11 +228,13 @@
 
     function buildTooltipHTML(zip, currentDay) {
       const val = daily[currentDay]?.[zip];
-      const valHtml = (val == null || Number.isNaN(val)) ? '<span style="color:#999">—</span>' : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
+      const valHtml = (val == null || Number.isNaN(val))
+        ? '<span style="color:#999">—</span>'
+        : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
       const trend = buildSparklineSVG(zip, currentDay, Object.keys(daily));
       return `
         <div><b>ZIP:</b> ${zip}</div>
-        <div style="margin-top:4px"><b>${currentDay}</b>：${valHtml}</div>
+        <div style="margin-top:4px"><b>${currentDay}</b>: ${valHtml}</div>
         ${trend}
       `;
     }
@@ -243,7 +247,10 @@
     const info = L.control();
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) { this._div.innerHTML = '将鼠标悬停到区域上查看数据'; return; }
+      if (!props) {
+        this._div.innerHTML = 'Hover over a ZIP area to view data';
+        return;
+      }
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
@@ -329,7 +336,7 @@
         `${fmt(b[2])} – ${fmt(b[3])}`,
         `>${fmt(b[3])}`
       ];
-      let html = '<b>颜色图例</b><br/>';
+      let html = '<b>Color Legend</b><br/>';
       for (let i=0; i<labels.length; i++) {
         html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
       }
@@ -337,18 +344,18 @@
     };
     legend.addTo(map);
 
-    // 记住最近一次 props
+    // remember last props
     const _origInfoUpdate = info.update.bind(info);
     info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
 
-    // 自动加载 GeoJSON（本地文件）
+    // Auto load local GeoJSON (Florida ZIP polygons)
     (async function autoLoadLocalGeo(){
       try {
         const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
         if (!r.ok) throw new Error('HTTP '+r.status);
         const gj = await r.json();
         renderGeo(gj);
-      } catch (e) { console.warn('自动加载本地 GeoJSON 失败：', e); }
+      } catch (e) { console.warn('Auto-loading local GeoJSON failed:', e); }
     })();
     function renderGeo(geojson){
       if (geoLayer) map.removeLayer(geoLayer);
@@ -357,7 +364,7 @@
       refreshMap();
     }
 
-    // ---------- GitHub API 枚举 CSV（仅 data/ 目录） ----------
+    // ---------- GitHub API: list CSVs in data/ directory ----------
     async function fetchCsvDatesFromGitHub() {
       const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
       const r = await fetch(api, { cache: 'no-store' });
@@ -370,10 +377,10 @@
       return dates;
     }
 
-    // 从 data/ 加载单日 CSV
+    // Load one daily CSV from data/
     async function fetchDayCsv(dayISO){
       const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
-      if (!r.ok) throw new Error(`读取 data/${dayISO}.csv 失败：${r.status}`);
+      if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
       const text = await r.text();
       const { headers, rows } = parseCsv(text);
       const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
@@ -387,7 +394,7 @@
         const idx = lowerHeaders.indexOf(a);
         if (idx!==-1){ valKey = headers[idx]; break; }
       }
-      if (!zipKey || !valKey) throw new Error("CSV 缺少 Zipcodes 或 数量列");
+      if (!zipKey || !valKey) throw new Error("CSV missing ZIP or quantity column");
 
       daily[dayISO] = {};
       rows.forEach(r=>{
@@ -401,7 +408,7 @@
       try{
         daySel.disabled = true;
         const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){ alert('data/ 目录里没找到 YYYY-MM-DD.csv'); return; }
+        if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
         daysList = [];
         for (const d of list) {
           await fetchDayCsv(d);
@@ -411,7 +418,7 @@
         refreshMap();
       }catch(e){
         console.error(e);
-        alert('从仓库加载失败：' + e.message);
+        alert('Failed to load data from repository: ' + e.message);
       }finally{
         daySel.disabled = false;
       }
@@ -433,10 +440,10 @@
 
     // Search & Export
     function focusZip(query){
-      if (!geoLayer) { alert('请先加载地图。'); return; }
+      if (!geoLayer) { alert('Please load the map first.'); return; }
       const q = (query||'').trim(); if (!q) return;
       const target = Object.keys(layerByZip).find(z => z.startsWith(q));
-      if (!target) { alert('未找到匹配的 ZIP。'); return; }
+      if (!target) { alert('No matching ZIP found.'); return; }
       const layer = layerByZip[target];
       map.fitBounds(layer.getBounds(), {maxZoom: 10});
       const el = layer.getElement();
@@ -451,16 +458,16 @@
       const obj = daily[d] || {};
       const rows = Object.entries(obj).map(([zip, val]) => `${zip},${val}`);
       const csv = ['Zipcodes,Quantity', ...rows].join('\n');
-      downloadText(`${d}_导出.csv`, csv);
+      downloadText(`${d}_export.csv`, csv);
     }
     exportCsv.addEventListener('click', exportCurrent);
 
-    // 交互刷新
+    // Interactions to refresh map
     daySel.addEventListener('change', refreshMap);
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
 
-    // 1W / 1M / MAX 切换
+    // 1W / 1M / MAX toggle
     const btn1w = document.getElementById('btn1w');
     const btn1m = document.getElementById('btn1m');
     const btnMax= document.getElementById('btnMax');
@@ -474,10 +481,10 @@
     btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
     btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
 
-    // 页面加载后自动拉取 data/ 目录下的 CSV 列表
+    // On page load, automatically pull CSV list from data/ directory
     document.addEventListener('DOMContentLoaded', async () => {
       syncRangeButtons();
-      await loadAllFromRepo().catch(e => console.warn('首次加载失败：', e));
+      await loadAllFromRepo().catch(e => console.warn('Initial load failed:', e));
     });
   </script>
 </body>
