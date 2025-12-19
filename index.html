@@ -32,172 +32,650 @@
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
     .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
+
+    /* ===== Minimal cleaner UI (no extra explanation) ===== */
+    .cleanWrap { margin-top: 6px; width: 100%; }
+    .bar { height: 10px; background:#eee; border-radius:999px; overflow:hidden; border:1px solid #e0e0e0; display:none; }
+    .bar > div { height:100%; width:0%; background:#111; border-radius:999px; transition: width .12s linear; }
+    .barText { display:none; margin-top:6px; font-size:12px; color:#555; justify-content:space-between; gap:10px; }
   </style>
 </head>
 <body>
+  <div class="panel">
+    <h1>Florida ZIP Volume Map</h1>
 
-<div class="panel">
-  <h1>Florida ZIP Volume Map</h1>
+    <div class="row">
+      <label>Date:
+        <select id="day"></select>
+      </label>
+      <div class="btnseg" id="rangeBtns">
+        <button class="seg" id="btn1w">1W</button>
+        <button class="seg" id="btn1m">1M</button>
+        <button class="seg" id="btnMax">MAX</button>
+      </div>
+    </div>
 
-  <div class="row">
-    <label>Date:
-      <select id="day"></select>
-    </label>
-    <div class="btnseg">
-      <button class="seg" id="btn1w">1W</button>
-      <button class="seg" id="btn1m">1M</button>
-      <button class="seg" id="btnMax">MAX</button>
+    <div class="row">
+      <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
+      <a class="btn" id="doSearch">Search</a>
+      <a class="btn" id="clearFocus">Clear</a>
+    </div>
+
+    <div class="row">
+      <label>Threshold highlight:
+        <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
+      </label>
+      <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
+    </div>
+
+    <!-- ✅ New: single button (kept minimal) -->
+    <div class="row">
+      <a class="btn" id="btnUploadClean">🧹 Upload &amp; Clean</a>
+      <span class="hint" id="cleanFileName" style="margin-top:0;">None</span>
+    </div>
+    <div class="cleanWrap">
+      <div class="bar" id="cleanBar"><div id="cleanFill"></div></div>
+      <div class="barText" id="cleanBarText">
+        <span id="cleanLabel">Preparing…</span>
+        <span id="cleanPct">0%</span>
+      </div>
+      <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
+    </div>
+
+    <div class="hint">
+      Fast load: first loads latest <b>7 days</b>. 1M / MAX loads on demand.
     </div>
   </div>
 
-  <div class="row">
-    <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
-    <a class="btn" id="doSearch">Search</a>
-    <a class="btn" id="clearFocus">Clear</a>
-  </div>
+  <div id="map"></div>
 
-  <div class="row">
-    <label>Threshold highlight:
-      <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
-    </label>
-    <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
-  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- ✅ XLSX reader -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-  <div class="hint">
-    Fast load: first loads latest <b>7 days</b>. 1M / MAX loads on demand.
-  </div>
-</div>
+  <script>
+    // ====== Configure your GitHub repository here ======
+    const GH_OWNER  = 'BeanSauce-hub';
+    const GH_REPO   = 'zipcodeMap';
+    const GH_BRANCH = 'main';
+    // ===================================================
 
-<div id="map"></div>
+    // ---------- Global state ----------
+    let windowMode = '1W';         // '1W' | '1M' | 'MAX'
+    const daily = {};              // { 'YYYY-MM-DD': { zip: value } }
+    let daysList = [];             // all available days in repo
+    const breaks = {};             // { day: [q20,q40,q60,q80] }
+    const loadedDays = new Set();  // which days have been fetched & parsed
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    // --- Focus highlight state ---
+    let focusedZip = null;
+    let focusWired = false;
 
-<script>
-/* ===================== CONFIG ===================== */
-const GH_OWNER  = 'BeanSauce-hub';
-const GH_REPO   = 'zipcodeMap';
-const GH_BRANCH = 'main';
+    // ---------- Utils ----------
+    function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
+    function normZip(z){
+      let s = String(z ?? '').trim();
+      if (s.endsWith('.0')) s = s.slice(0,-2);
+      s = s.replace(/\D/g,'');
+      if (s.length > 5) s = s.slice(0,5);
+      return s.padStart(5,'0');
+    }
+    function parseCsv(text){
+      const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
+      const rows = out.data.map(r=>{
+        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim?.()] = String(r[k] ?? '').trim(); });
+        return obj;
+      });
+      const headers = out.meta.fields || [];
+      return { headers, rows };
+    }
+    function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
-/* ===================== STATE ===================== */
-let windowMode = '1W';
-const daily = {};
-let daysList = [];
-const breaks = {};
-const loadedDays = new Set();
-let focusedZip = null;
-let focusWired = false;
+    // UTC date helpers
+    function addDaysUTC(iso, n){
+      const [y,m,d] = iso.split('-').map(Number);
+      const dt = new Date(Date.UTC(y, m-1, d + n));
+      return dt.toISOString().slice(0,10);
+    }
+    function rangeDaysUTC(a,b){
+      const out=[]; let cur=a;
+      while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1); }
+      return out;
+    }
 
-/* ===================== UTILS ===================== */
-function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
-function normZip(z){
-  let s = String(z ?? '').trim();
-  if (s.endsWith('.0')) s = s.slice(0,-2);
-  s = s.replace(/\D/g,'');
-  if (s.length > 5) s = s.slice(0,5);
-  return s.padStart(5,'0');
-}
+    // ✅ Cleaner helpers (case-insensitive zipcode/zip/邮编)
+    function _normHeader(h){ return String(h ?? '').trim().toLowerCase().replace(/\s+/g,''); }
+    function findZipKey(headers){
+      const m = new Map();
+      headers.forEach(h => m.set(_normHeader(h), h));
+      const targets = ['zipcode','zip','邮编'];
+      for (const t of targets){ if (m.has(t)) return m.get(t); }
+      for (const [k, orig] of m.entries()){
+        if (k.includes('zipcode')) return orig;
+        if (k === 'zip') return orig;
+        if (k.includes('邮编')) return orig;
+      }
+      return null;
+    }
+    async function readTableFile(file){
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (ext === 'csv'){
+        const rawText = await file.text();
+        return parseCsv(rawText);
+      }
+      if (ext === 'xlsx'){
+        const ab = await file.arrayBuffer();
+        const wb = XLSX.read(ab, {type:'array'});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+        const headers = Object.keys(rows[0] || {});
+        return { headers, rows };
+      }
+      throw new Error('Unsupported file type (.csv / .xlsx only)');
+    }
 
-/* ===================== MAP ===================== */
-const map = L.map('map').setView([27.8, -81.7], 6);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 12,
-  attribution: '&copy; OpenStreetMap'
-}).addTo(map);
-map.zoomControl.setPosition('bottomleft');
+    // ---------- Focus styles ----------
+    function applyFocusStyles(){
+      if (!geoLayer || !focusedZip) return;
 
-/* ===================== INFO (HIDDEN) ===================== */
-const info = L.control();
-info.onAdd = function(){
-  this._div = L.DomUtil.create('div','info');
-  this._div.style.display = 'none';        // ★ CHANGED: hide hover hint
-  return this._div;
-};
-info.update = function(props){
-  if (!props || !this._div) return;
-};
-info.addTo(map);                            // keep mounted to avoid breaking logic
+      geoLayer.eachLayer(l => {
+        const z = getZipFromFeature(l.feature);
+        const isTarget = (z === focusedZip);
 
-/* ===================== LEGEND ===================== */
-const legend = L.control({position:'bottomright'});
-legend.onAdd = function(){
-  this._div = L.DomUtil.create('div','legend');
-  this.update();
-  return this._div;
-};
-legend.update = function(){
-  const d = daySel.value;
-  const b = breaks[d]||[0,0,0,0];
-  const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
-  const labels = [
-    `${fmt(0)} – ${fmt(b[0])}`,
-    `${fmt(b[0])} – ${fmt(b[1])}`,
-    `${fmt(b[1])} – ${fmt(b[2])}`,
-    `${fmt(b[2])} – ${fmt(b[3])}`,
-    `>${fmt(b[3])}`
-  ];
-  let html = '<b>Color Legend</b><br/>';
-  labels.forEach((l,i)=>{
-    html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${l}<br/>`;
-  });
-  this._div.innerHTML = html;
-};
-legend.addTo(map);
+        if (isTarget) {
+          l.setStyle({ opacity: 1, fillOpacity: 0.95, weight: 3, color: '#000' });
+          l.bringToFront();
 
-/* ===================== ELEMENTS ===================== */
-let geoLayer;
-const layerByZip = {};
-const daySel = document.getElementById('day');
-const searchInput = document.getElementById('searchZip');
-const doSearch = document.getElementById('doSearch');
-const clearBtn = document.getElementById('clearFocus');
-const thresholdOn = document.getElementById('thresholdOn');
-const thresholdInput = document.getElementById('threshold');
+          const el = l.getElement();
+          if (el){
+            el.classList.add('flash');
+            setTimeout(()=> el.classList.remove('flash'), 1800);
+          }
+        } else {
+          l.setStyle({ opacity: 0.20, fillOpacity: 0.12, weight: 0.7, color: '#777' });
+        }
+      });
+    }
+    function clearFocus(){
+      focusedZip = null;
+      if (!geoLayer) return;
+      geoLayer.setStyle(styleFeature);
+      info.update();
+    }
 
-/* ===================== LOAD DATA ===================== */
-async function fetchCsvDatesFromGitHub(){
-  const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
-  const r = await fetch(api);
-  const data = await r.json();
-  return (data.tree||[])
-    .filter(n=>n.type==='blob' && /^data\/\d{4}-\d{2}-\d{2}\.csv$/.test(n.path))
-    .map(n=>n.path.replace('data/','').replace('.csv',''))
-    .sort();
-}
+    // ---------- Mini sparkline chart ----------
+    function buildSparklineSVG(zip, currentDay, daysListAllLoadedOrNot) {
+      const mode = (typeof windowMode === 'string' ? windowMode : '1W');
+      const allDays = sortDatesAsc(Object.keys(daily)); // only loaded days
+      if (!allDays.length) return "";
 
-async function fetchDayCsv(day){
-  if (loadedDays.has(day)) return;
-  const r = await fetch(`./data/${day}.csv?ts=${Date.now()}`);
-  const text = await r.text();
-  const out = Papa.parse(text,{header:true,skipEmptyLines:true});
-  daily[day] = {};
-  out.data.forEach(r=>{
-    const z = normZip(r.zip || r.ZIP || r.zipcode);
-    const v = Number(r.quantity || r.Quantity || 0);
-    if (z) daily[day][z] = v;
-  });
-  loadedDays.add(day);
-}
+      const endDay = (currentDay && daysList.includes(currentDay)) ? currentDay : (daysList[daysList.length - 1] || allDays[allDays.length - 1]);
+      const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
 
-/* ===================== INIT ===================== */
-async function init(){
-  daysList = await fetchCsvDatesFromGitHub();
-  const last7 = daysList.slice(-7);
-  for (const d of last7) await fetchDayCsv(d);
+      let fullDays;
+      if (span) {
+        const start = addDaysUTC(endDay, -(span - 1));
+        fullDays = rangeDaysUTC(start, endDay);
+      } else {
+        // MAX: show only loaded range (will expand as you load more)
+        fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
+      }
 
-  daySel.innerHTML = '';
-  daysList.forEach(d=>{
-    const o=document.createElement('option');
-    o.value=d; o.textContent=d; daySel.appendChild(o);
-  });
-  daySel.value = last7[last7.length-1];
-}
-init();
+      const vals = fullDays.map(d => {
+        const v = daily[d]?.[zip];
+        return (v == null || Number.isNaN(v)) ? null : Number(v);
+      });
 
-/* ===================== EVENTS ===================== */
-doSearch.onclick = ()=>{};
-clearBtn.onclick = ()=>{ focusedZip=null; };
+      const valid = vals.filter(v => v != null);
+      if (valid.length < 2) return "";
 
-</script>
+      // y-axis: start at 0, keep 5% headroom
+      const minV = 0;
+      const maxData = Math.max(...valid, 0);
+      const maxV = maxData * 1.05 || 1;
+
+      // Canvas and plot area
+      const W = 300, H = 100;
+      const GUTTER_LEFT = 56;
+      const PAD_X = 14, PAD_Y = 18;
+      const plotX0 = GUTTER_LEFT + PAD_X;
+      const plotX1 = W - PAD_X - 6;
+      const plotW  = plotX1 - plotX0;
+
+      const xs = fullDays.map((_, i) =>
+        plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
+      );
+      const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
+
+      // Line (break on missing; no dots)
+      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
+      let d = "";
+      for (let i=0;i<points.length;i++){
+        const p = points[i]; if (!p) continue;
+        if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+      }
+
+      // X-axis ticks
+      const wantLabelIdx = [];
+      if (mode === '1W') {
+        for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
+      } else if (mode === '1M') {
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
+        }
+      } else { // MAX
+        for (let i=0; i<fullDays.length; i++) {
+          const day = parseInt(fullDays[i].slice(8,10), 10);
+          if (day === 1) wantLabelIdx.push(i);
+        }
+        const MAX_TICKS = 8;
+        if (wantLabelIdx.length > MAX_TICKS) {
+          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
+          const slim = [];
+          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
+          wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
+        }
+      }
+
+      const fmtTick = (iso) => {
+        const m = parseInt(iso.slice(5,7), 10);
+        const dd = parseInt(iso.slice(8,10), 10);
+        if (dd === 1) return `${m}-1`;
+        return `${dd}`;
+      };
+      const xLabels = wantLabelIdx.map(i =>
+        `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
+      ).join("");
+
+      // Reference lines + labels (min fixed at 0)
+      const minY = yScale(minV), maxY = yScale(maxData);
+      const guides = `
+        <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
+        <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
+        <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
+        <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke-width: 3px; stroke: #fff;" fill="#666">0</text>
+      `;
+
+      return `
+        <div class="sparkline">
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+            <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
+            ${guides}
+            <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            ${xLabels}
+          </svg>
+        </div>
+      `;
+    }
+
+    function buildTooltipHTML(zip, currentDay) {
+      const val = daily[currentDay]?.[zip];
+      const valHtml = (val == null || Number.isNaN(val))
+        ? '<span style="color:#999">—</span>'
+        : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
+      const trend = buildSparklineSVG(zip, currentDay, daysList);
+      return `
+        <div><b>ZIP:</b> ${zip}</div>
+        <div style="margin-top:4px"><b>${currentDay}</b>: ${valHtml}</div>
+        ${trend}
+      `;
+    }
+
+    // ---------- Map ----------
+    const map = L.map('map').setView([27.8, -81.7], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
+    map.zoomControl.setPosition('bottomleft');
+
+    const info = L.control();
+    info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
+    info.update = function(props){
+      if (!props) { this._div.innerHTML = 'Hover over a ZIP area to view data'; return; }
+      const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
+      const cur = daySel.value;
+      this._div.innerHTML = buildTooltipHTML(zip, cur);
+    };
+    info.addTo(map);
+
+    let geoLayer;
+    const layerByZip = {};
+    const daySel = document.getElementById('day');
+    const searchInput = document.getElementById('searchZip');
+    const doSearch = document.getElementById('doSearch');
+    const clearBtn = document.getElementById('clearFocus');
+
+    const thresholdOn = document.getElementById('thresholdOn');
+    const thresholdInput = document.getElementById('threshold');
+
+    function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
+
+    function getColor(d, b) {
+      if (d == null) return '#f2f2f2';
+      if (d <= b[0]) return '#ffffcc';
+      if (d <= b[1]) return '#ffeda0';
+      if (d <= b[2]) return '#feb24c';
+      if (d <= b[3]) return '#fd8d3c';
+      return '#e31a1c';
+    }
+    function overThreshold(val){
+      if (!thresholdOn.checked) return false;
+      const t = Number(thresholdInput.value);
+      if (!isFinite(t)) return false;
+      return (Number(val)||0) >= t;
+    }
+
+    function styleFeature(feature){
+      const z = getZipFromFeature(feature);
+      const d = daySel.value;
+      const val = (daily[d] && daily[d][z] != null) ? daily[d][z] : null;
+      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
+      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
+      return base;
+    }
+    function highlightFeature(e){
+      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
+      const z=getZipFromFeature(layer.feature);
+      info.update({ ZCTA5CE10:z });
+    }
+    function resetHighlight(e){
+      geoLayer.resetStyle(e.target);
+      info.update();
+      if (focusedZip) applyFocusStyles();
+    }
+    function onEachFeature(feature,layer){
+      const z = getZipFromFeature(feature);
+      layerByZip[z] = layer;
+      layer.on({mouseover:highlightFeature, mouseout:resetHighlight, click:highlightFeature});
+      layer.bindTooltip(() => buildTooltipHTML(z, daySel.value), { sticky: true });
+    }
+
+    function computeBreaks(values){
+      const vals = values.filter(v=>v>0 && isFinite(v)).sort((a,b)=>a-b);
+      if (!vals.length) return [0,0,0,0];
+      const q = p => vals[Math.floor(p*(vals.length-1))];
+      return [q(.2), q(.4), q(.6), q(.8)];
+    }
+    function updateBreaksFor(day){
+      const vals = Object.values(daily[day]||{}).map(v=>+v||0);
+      breaks[day] = computeBreaks(vals);
+    }
+    function refreshMap(){
+      const d = daySel.value;
+      if (!d || !geoLayer) return;
+      updateBreaksFor(d);
+      geoLayer.setStyle(styleFeature);
+      legend.update();
+      info.update(info._lastProps);
+      if (focusedZip) applyFocusStyles();
+    }
+
+    const legend=L.control({position:'bottomright'});
+    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
+    legend.update=function(){
+      const d = daySel.value; const b = breaks[d]||[0,0,0,0];
+      const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
+      const labels = [
+        `${fmt(0)} – ${fmt(b[0])}`,
+        `${fmt(b[0])} – ${fmt(b[1])}`,
+        `${fmt(b[1])} – ${fmt(b[2])}`,
+        `${fmt(b[2])} – ${fmt(b[3])}`,
+        `>${fmt(b[3])}`
+      ];
+      let html = '<b>Color Legend</b><br/>';
+      for (let i=0; i<labels.length; i++) {
+        html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
+      }
+      this._div.innerHTML = html;
+    };
+    legend.addTo(map);
+
+    // remember last props
+    const _origInfoUpdate = info.update.bind(info);
+    info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
+
+    // Auto load local GeoJSON (Florida ZIP polygons)
+    (async function autoLoadLocalGeo(){
+      try {
+        const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        const gj = await r.json();
+        renderGeo(gj);
+      } catch (e) { console.warn('Auto-loading local GeoJSON failed:', e); }
+    })();
+    function renderGeo(geojson){
+      if (geoLayer) map.removeLayer(geoLayer);
+      geoLayer = L.geoJSON(geojson, { style: styleFeature, onEachFeature: onEachFeature }).addTo(map);
+      map.fitBounds(geoLayer.getBounds());
+
+      // click blank area to clear focus (bind once)
+      if (!focusWired){
+        focusWired = true;
+        map.on('click', (e) => {
+          const t = e.originalEvent?.target;
+          const clickedOnPath = t && (t.tagName === 'PATH' || t.tagName === 'path');
+          if (!clickedOnPath) clearFocus();
+        });
+      }
+
+      refreshMap();
+    }
+
+    // ---------- GitHub API: list CSVs in data/ directory ----------
+    async function fetchCsvDatesFromGitHub() {
+      const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
+      const r = await fetch(api, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+      const data = await r.json();
+      const dates = (data.tree || [])
+        .filter(n => n.type === 'blob' && /^data\/\d{4}-\d{2}-\d{2}\.csv$/i.test(n.path))
+        .map(n => n.path.replace(/^data\//, '').replace(/\.csv$/i, ''))
+        .sort((a,b)=> a.localeCompare(b));
+      return dates;
+    }
+
+    // Load one daily CSV from data/
+    async function fetchDayCsv(dayISO){
+      if (loadedDays.has(dayISO)) return; // avoid re-fetch
+      const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
+      if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
+      const text = await r.text();
+      const { headers, rows } = parseCsv(text);
+      const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
+
+      let zipKey=null, valKey=null;
+      for (const a of ['zipcodes','zip','zipcode','zip_code']){
+        const idx = lowerHeaders.indexOf(a);
+        if (idx!==-1){ zipKey = headers[idx]; break; }
+      }
+      for (const a of ['quantity','pred_quantity','数量','货量']){
+        const idx = lowerHeaders.indexOf(a);
+        if (idx!==-1){ valKey = headers[idx]; break; }
+      }
+      if (!zipKey || !valKey) throw new Error("CSV missing ZIP or quantity column");
+
+      daily[dayISO] = {};
+      rows.forEach(r=>{
+        const z = normZip(r[zipKey]);
+        const v = Number(String(r[valKey]).replace(/,/g,'')) || 0;
+        if (z && z!=='00000') daily[dayISO][z] = v;
+      });
+
+      loadedDays.add(dayISO);
+    }
+
+    async function ensureDaysLoaded(dayArray){
+      const need = dayArray.filter(d => !loadedDays.has(d));
+      if (!need.length) return;
+
+      // simple & stable: serial
+      for (const d of need){
+        await fetchDayCsv(d);
+      }
+    }
+
+    async function ensureWindowData(){
+      if (!daysList.length) return;
+      const endDay = daySel.value || daysList[daysList.length-1];
+      if (!endDay) return;
+
+      if (windowMode === 'MAX'){
+        await ensureDaysLoaded(daysList);
+        return;
+      }
+
+      const span = (windowMode === '1M') ? 30 : 7;
+      const start = addDaysUTC(endDay, -(span-1));
+      const want = rangeDaysUTC(start, endDay).filter(d => daysList.includes(d));
+      await ensureDaysLoaded(want);
+    }
+
+    // ---------- Fast initial load: only latest 7 days ----------
+    async function loadInitialFast7(){
+      try{
+        daySel.disabled = true;
+
+        const list = await fetchCsvDatesFromGitHub();
+        if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
+
+        daysList = list.slice();
+        renderDayOptions(); // default selects latest day
+
+        // pick latest 7 existing days
+        const latest7 = daysList.slice(-7);
+        // load them so 1W & tooltip trend are ready on first paint
+        for (const d of latest7){
+          await fetchDayCsv(d);
+        }
+
+        refreshMap();
+      }catch(e){
+        console.error(e);
+        alert('Failed to load data from repository: ' + e.message);
+      }finally{
+        daySel.disabled = false;
+      }
+    }
+
+    function renderDayOptions(){
+      const sel = daySel;
+      const cur = sel.value;
+      sel.innerHTML = '';
+      daysList.forEach(d=>{
+        const opt = document.createElement('option');
+        opt.value = d; opt.textContent = d;
+        sel.appendChild(opt);
+      });
+      if (daysList.length){
+        sel.value = daysList.includes(cur) ? cur : daysList[daysList.length-1];
+      }
+    }
+
+    // Search
+    function focusZip(query){
+      if (!geoLayer) { alert('Please load the map first.'); return; }
+      const q = (query||'').trim(); if (!q) return;
+      const target = Object.keys(layerByZip).find(z => z.startsWith(q));
+      if (!target) { alert('No matching ZIP found.'); return; }
+
+      focusedZip = target;
+      applyFocusStyles();
+
+      const layer = layerByZip[target];
+      map.fitBounds(layer.getBounds(), {maxZoom: 10});
+      layer.openTooltip();
+    }
+
+    // ✅ Cleaner UI wiring (kept minimal)
+    const btnUploadClean = document.getElementById('btnUploadClean');
+    const cleanPicker = document.getElementById('cleanFilePicker');
+    const cleanFileName = document.getElementById('cleanFileName');
+    const cleanBar = document.getElementById('cleanBar');
+    const cleanFill = document.getElementById('cleanFill');
+    const cleanBarText = document.getElementById('cleanBarText');
+    const cleanLabel = document.getElementById('cleanLabel');
+    const cleanPct = document.getElementById('cleanPct');
+
+    btnUploadClean.addEventListener('click', ()=> cleanPicker.click());
+
+    cleanPicker.addEventListener('change', async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+
+      cleanFileName.textContent = f.name;
+
+      cleanBar.style.display = 'block';
+      cleanBarText.style.display = 'flex';
+      cleanFill.style.width = '0%';
+      cleanLabel.textContent = 'Cleaning…';
+      cleanPct.textContent = '0%';
+
+      const readPromise = (async ()=>{
+        const { headers, rows } = await readTableFile(f);
+        const zipKey = findZipKey(headers);
+        if (!zipKey) throw new Error('ZIP column not found (zipcode / ZIP / 邮编)');
+        return { rows, zipKey };
+      })();
+
+      const t0 = performance.now();
+      const DURATION = 1800;
+
+      const tick = async () => {
+        const t = performance.now();
+        const p = Math.min(99, Math.round(((t - t0) / DURATION) * 100));
+        cleanFill.style.width = p + '%';
+        cleanPct.textContent = p + '%';
+
+        if (p < 99) requestAnimationFrame(tick);
+        else {
+          try{
+            const { rows, zipKey } = await readPromise;
+
+            cleanFill.style.width = '100%';
+            cleanPct.textContent = '100%';
+            // still UI mock; just confirm we can read & detect ZIP column
+            cleanLabel.textContent = `Done • ${zipKey} • ${rows.length}`;
+          }catch(err){
+            cleanLabel.textContent = 'Failed';
+            alert(err?.message || String(err));
+          }finally{
+            cleanPicker.value = '';
+          }
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+
+    // Interactions
+    doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
+    searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
+    clearBtn.addEventListener('click', ()=> clearFocus());
+
+    daySel.addEventListener('change', async ()=>{ await ensureWindowData(); refreshMap(); });
+    thresholdOn.addEventListener('change', refreshMap);
+    thresholdInput.addEventListener('change', refreshMap);
+
+    // 1W / 1M / MAX toggle
+    const btn1w = document.getElementById('btn1w');
+    const btn1m = document.getElementById('btn1m');
+    const btnMax= document.getElementById('btnMax');
+
+    function syncRangeButtons(){
+      btn1w.classList.toggle('active', windowMode==='1W');
+      btn1m.classList.toggle('active', windowMode==='1M');
+      btnMax.classList.toggle('active', windowMode==='MAX');
+    }
+    btn1w.addEventListener('click', async ()=>{ windowMode='1W'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
+    btn1m.addEventListener('click', async ()=>{ windowMode='1M'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
+    btnMax.addEventListener('click', async ()=>{ windowMode='MAX'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
+
+    // On page load
+    document.addEventListener('DOMContentLoaded', async () => {
+      syncRangeButtons();
+      await loadInitialFast7().catch(e => console.warn('Initial load failed:', e));
+    });
+  </script>
 </body>
 </html>
