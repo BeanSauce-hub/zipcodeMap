@@ -12,25 +12,27 @@
     .panel {
       position: absolute; z-index: 1000; left: 10px; top: 10px;
       background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', sans-serif;
-      max-width: 540px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+      max-width: 620px;
     }
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
     .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
     .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
     .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
     select{ padding:4px 8px; border-radius:8px; }
+    .hint{font-size:12px;color:#666;margin-top:6px;}
+    .flash { animation: flash 1s ease-in-out 3; }
+    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
+    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
 
     .btnseg { display:inline-flex; gap:6px; }
     .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
     .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
 
-    .flash { animation: flash 1s ease-in-out 3; }
-    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
-
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
     .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
+    .pill { display:inline-block; padding:2px 6px; border-radius:999px; background:#f2f2f2; border:1px solid #ddd; font-size:12px; }
   </style>
 </head>
 <body>
@@ -51,6 +53,30 @@
     <div class="row">
       <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
       <a class="btn" id="doSearch">Search</a>
+      <a class="btn" id="clearFocus">Clear focus</a>
+    </div>
+
+    <div class="row">
+      <label>Threshold highlight:
+        <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
+      </label>
+      <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
+    </div>
+
+    <!-- ✅ 新增：上传 raw daily 文件（图一）并转成可读的 daily 聚合（图二） -->
+    <div class="row">
+      <a class="btn" id="uploadRawBtn">Upload raw daily file</a>
+      <label class="pill">Upload date:
+        <input class="input" id="uploadDate" type="date" style="padding:4px 6px;font-size:12px" />
+      </label>
+      <span class="hint" id="uploadStatus" style="margin:0"></span>
+      <input type="file" id="rawPicker" accept=".csv,.xlsx" style="display:none" />
+    </div>
+
+    <div class="hint">
+      Raw file (your Fig.1) → aggregated Fig.2 automatically.<br/>
+      ZIP column auto-detect: headers containing <b>邮编 / ZIP / zipcode / zip_code</b> (prefer “目的/收件/到达”).<br/>
+      Each row counts as 1 package. Result stored into the selected date (or Upload date if set).
     </div>
   </div>
 
@@ -58,6 +84,9 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- ✅ 用于读取 Excel -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+
   <script>
     // ====== Configure your GitHub repository here ======
     const GH_OWNER  = 'BeanSauce-hub';
@@ -95,25 +124,45 @@
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
+    function isoFromDateInput(v){
+      // v like "2025-12-19"
+      if (!v) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      return null;
+    }
+
     function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
+
       geoLayer.eachLayer(l => {
         const z = getZipFromFeature(l.feature);
         const isTarget = (z === focusedZip);
 
         if (isTarget) {
-          l.setStyle({ opacity: 1, fillOpacity: 0.95, weight: 3, color: '#000' });
+          l.setStyle({
+            opacity: 1,
+            fillOpacity: 0.95,
+            weight: 3,
+            color: '#000'
+          });
           l.bringToFront();
+
           const el = l.getElement();
           if (el){
             el.classList.add('flash');
             setTimeout(()=> el.classList.remove('flash'), 1800);
           }
         } else {
-          l.setStyle({ opacity: 0.20, fillOpacity: 0.12, weight: 0.7, color: '#777' });
+          l.setStyle({
+            opacity: 0.20,
+            fillOpacity: 0.12,
+            weight: 0.7,
+            color: '#777'
+          });
         }
       });
     }
+
     function clearFocus(){
       focusedZip = null;
       if (!geoLayer) return;
@@ -135,9 +184,13 @@
       };
       const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
 
+      // End date
       const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
+
+      // Window span
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
 
+      // Continuous date sequence
       let fullDays;
       if (span) {
         const start = addDaysUTC(endDay, -(span - 1));
@@ -150,13 +203,16 @@
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
+
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
 
+      // y-axis: start at 0, keep 5% headroom
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
 
+      // Canvas and plot area
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
@@ -169,6 +225,7 @@
       );
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
 
+      // Line (break on missing; no dots)
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
       let d = "";
       for (let i=0;i<points.length;i++){
@@ -176,6 +233,7 @@
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
 
+      // X-axis tick strategy
       const wantLabelIdx = [];
       if (mode === '1W') {
         for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
@@ -184,11 +242,12 @@
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
         }
-      } else {
+      } else { // MAX
         for (let i=0; i<fullDays.length; i++) {
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1) wantLabelIdx.push(i);
         }
+        // thin to max 8 ticks
         const MAX_TICKS = 8;
         if (wantLabelIdx.length > MAX_TICKS) {
           const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
@@ -208,6 +267,7 @@
         `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
       ).join("");
 
+      // Reference lines + min/max labels (min fixed at 0)
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -251,7 +311,10 @@
     const info = L.control();
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) { this._div.innerHTML = 'Hover over a ZIP area to view data'; return; }
+      if (!props) {
+        this._div.innerHTML = 'Hover over a ZIP area to view data';
+        return;
+      }
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
@@ -263,6 +326,10 @@
     const daySel = document.getElementById('day');
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
+    const clearFocusBtn = document.getElementById('clearFocus');
+
+    const thresholdOn = document.getElementById('thresholdOn');
+    const thresholdInput = document.getElementById('threshold');
 
     function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
 
@@ -274,17 +341,23 @@
       if (d <= b[3]) return '#fd8d3c';
       return '#e31a1c';
     }
+    function overThreshold(val){
+      if (!thresholdOn.checked) return false;
+      const t = Number(thresholdInput.value);
+      if (!isFinite(t)) return false;
+      return (Number(val)||0) >= t;
+    }
 
     function styleFeature(feature){
       const z = getZipFromFeature(feature);
       const d = daySel.value;
       const val = (daily[d] && daily[d][z] != null) ? daily[d][z] : null;
-      return {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
+      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
+      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
+      return base;
     }
     function highlightFeature(e){
-      const layer = e.target;
-      layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9});
-      layer.bringToFront();
+      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
       const z=getZipFromFeature(layer.feature);
       info.update({ ZCTA5CE10:z });
     }
@@ -384,7 +457,7 @@
       return dates;
     }
 
-    // Load one daily CSV from data/
+    // Load one daily CSV from data/  (already aggregated form)
     async function fetchDayCsv(dayISO){
       const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
       if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
@@ -415,7 +488,12 @@
       try{
         daySel.disabled = true;
         const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
+        if (!list.length){
+          // no files is allowed; user may upload manually
+          daysList = [];
+          renderDayOptions();
+          return;
+        }
         daysList = [];
         for (const d of list) {
           await fetchDayCsv(d);
@@ -431,6 +509,16 @@
       }
     }
 
+    function ensureDayInSelector(dayISO){
+      if (!dayISO) return;
+      if (!daysList.includes(dayISO)) {
+        daysList.push(dayISO);
+        daysList = daysList.sort((a,b)=>a.localeCompare(b));
+        renderDayOptions();
+      }
+      daySel.value = dayISO;
+    }
+
     function renderDayOptions(){
       const sel = daySel;
       const cur = sel.value;
@@ -442,10 +530,16 @@
       });
       if (daysList.length){
         sel.value = daysList.includes(cur) ? cur : daysList[daysList.length-1];
+      } else {
+        // if empty, still allow selecting an upload date later
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '(upload a date)';
+        sel.appendChild(opt);
+        sel.value = '';
       }
     }
 
-    // Search
+    // Search (focus)
     function focusZip(query){
       if (!geoLayer) { alert('Please load the map first.'); return; }
       const q = (query||'').trim(); if (!q) return;
@@ -461,9 +555,12 @@
     }
     doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
     searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
+    clearFocusBtn.addEventListener('click', clearFocus);
 
     // Interactions to refresh map
     daySel.addEventListener('change', refreshMap);
+    thresholdOn.addEventListener('change', refreshMap);
+    thresholdInput.addEventListener('change', refreshMap);
 
     // 1W / 1M / MAX toggle
     const btn1w = document.getElementById('btn1w');
@@ -479,7 +576,127 @@
     btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
     btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
 
-    // On page load, automatically pull CSV list from data/ directory
+    // ---------- ✅ NEW: Upload raw daily (Fig.1) -> aggregate to Fig.2 ----------
+    const uploadRawBtn = document.getElementById('uploadRawBtn');
+    const rawPicker = document.getElementById('rawPicker');
+    const uploadDate = document.getElementById('uploadDate');
+    const uploadStatus = document.getElementById('uploadStatus');
+
+    uploadRawBtn.addEventListener('click', ()=> rawPicker.click());
+    rawPicker.addEventListener('change', async (e)=>{
+      const f = e.target.files?.[0];
+      if (!f) return;
+      try{
+        uploadStatus.textContent = 'Processing...';
+        const targetDay = isoFromDateInput(uploadDate.value) || daySel.value;
+        if (!targetDay){
+          uploadStatus.textContent = '';
+          alert('Please choose Upload date (or select a Date in dropdown) before uploading.');
+          return;
+        }
+
+        const rows = await readAnyToRows(f);     // rows: array of objects
+        const { zipKey } = detectZipKey(rows);   // find ZIP column in raw file
+        if (!zipKey){
+          uploadStatus.textContent = '';
+          alert('Cannot detect ZIP column.\nMake sure your header contains: 目的站点邮编 / 邮编 / ZIP / zipcode / zip_code');
+          return;
+        }
+
+        // Aggregate counts
+        const agg = {};
+        let used = 0, skipped = 0;
+
+        for (const r of rows){
+          const z = normZip(r[zipKey]);
+          if (!z || z === '00000' || z.length !== 5){
+            skipped++;
+            continue;
+          }
+          agg[z] = (agg[z] || 0) + 1;
+          used++;
+        }
+
+        daily[targetDay] = agg;
+        ensureDayInSelector(targetDay);
+        refreshMap();
+
+        uploadStatus.textContent = `Done. ${used} rows → ${Object.keys(agg).length} ZIPs (skipped: ${skipped})`;
+      }catch(err){
+        console.error(err);
+        uploadStatus.textContent = '';
+        alert('Upload failed: ' + (err?.message || String(err)));
+      }finally{
+        rawPicker.value = '';
+      }
+    });
+
+    async function readAnyToRows(file){
+      const name = (file.name || '').toLowerCase();
+      if (name.endsWith('.xlsx')){
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const wsName = wb.SheetNames[0];
+        const ws = wb.Sheets[wsName];
+        // defval:'' keeps missing cells
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        return rows;
+      }
+
+      // default CSV
+      const text = await file.text();
+      const { headers, rows } = parseCsv(text);
+      // If PapaParse failed to read headers (rare), try TSV fallback
+      if (!headers || !headers.length) {
+        // naive TSV
+        const lines = text.split(/\r?\n/).filter(x=>x.trim());
+        if (!lines.length) return [];
+        const head = lines[0].split('\t').map(s=>s.trim());
+        return lines.slice(1).map(line=>{
+          const parts = line.split('\t');
+          const obj = {};
+          head.forEach((h,i)=> obj[h]= (parts[i] ?? '').trim());
+          return obj;
+        });
+      }
+      return rows;
+    }
+
+    function detectZipKey(rows){
+      if (!rows || !rows.length) return { zipKey: null };
+
+      const keys = Object.keys(rows[0] || {});
+      const lower = keys.map(k => String(k).trim().toLowerCase());
+
+      // strong hints (prefer destination-related zip)
+      const strongCn = ['目的站点邮编','目的地邮编','收件邮编','到达邮编','目的邮编'];
+      for (const s of strongCn){
+        const idx = lower.indexOf(String(s).toLowerCase());
+        if (idx !== -1) return { zipKey: keys[idx] };
+      }
+
+      // heuristic: contains zip / 邮编
+      const candidates = [];
+      for (let i=0;i<keys.length;i++){
+        const k = keys[i];
+        const l = lower[i];
+        const score =
+          (l.includes('邮编') ? 50 : 0) +
+          (l.includes('zip') ? 40 : 0) +
+          (l.includes('zipcode') ? 40 : 0) +
+          (l.includes('zip_code') ? 40 : 0) +
+          (l.includes('目的') ? 30 : 0) +
+          (l.includes('目的地') ? 30 : 0) +
+          (l.includes('目的站') ? 30 : 0) +
+          (l.includes('收件') ? 20 : 0) +
+          (l.includes('到达') ? 20 : 0);
+        if (score > 0) candidates.push({ key: k, score });
+      }
+      candidates.sort((a,b)=>b.score-a.score);
+      return { zipKey: candidates[0]?.key || null };
+    }
+
+    // On page load
     document.addEventListener('DOMContentLoaded', async () => {
       syncRangeButtons();
       await loadAllFromRepo().catch(e => console.warn('Initial load failed:', e));
