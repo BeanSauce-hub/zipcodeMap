@@ -1,37 +1,58 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh">
 <head>
   <meta charset="utf-8" />
-  <title>Florida ZIP Volume Map</title>
+  <title>Florida ZIP Volume Map (Local GeoJSON + Daily Trend + Focus Highlight)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body, #map { height: 100%; margin: 0; }
-    .legend { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
-    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size:12px; }
+
+    .legend { background: white; padding: 10px 12px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
+    .info { padding: 8px 10px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.12); font-size:12px; }
+
     .panel {
-      position: absolute; z-index: 1000; left: 10px; top: 10px;
-      background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
+      position: absolute; z-index: 1000; left: 12px; top: 12px;
+      background: rgba(255,255,255,.95); padding: 12px 14px; border-radius: 14px;
+      box-shadow: 0 2px 14px rgba(0,0,0,.10);
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
-      max-width: 540px;
+      min-width: 340px;
     }
-    .panel h1 { font-size: 18px; margin: 0 0 6px; }
-    .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
-    .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
-    select{ padding:4px 8px; border-radius:8px; }
-    .hint{font-size:12px;color:#666;margin-top:6px;}
+    .panel h1 { font-size: 20px; margin: 0 0 10px; }
+    .panel .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .btn {
+      display:inline-block; padding:7px 12px; border-radius:10px; background:#111; color:#fff;
+      text-decoration:none; cursor:pointer; font-size:12px; user-select:none;
+    }
+    .btn.ghost { background:#fff; color:#111; border:1px solid #ddd; }
+    .input { padding:7px 10px; border-radius:10px; border:1px solid #ddd; font-size:13px; }
+    select{ padding:6px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; }
+    .toggle { display:flex; align-items:center; gap:8px; font-size:12px; }
+    .hint{font-size:12px;color:#666;margin-top:10px;line-height:1.35;}
+
+    .drop {
+      position:absolute; z-index:999; left:50%; top:50%; transform:translate(-50%,-50%);
+      width:min(720px,90vw); padding:18px; border:2px dashed #888; border-radius:12px;
+      background:rgba(255,255,255,.96); display:none; text-align:center;
+    }
+    .drop h2{margin:0 0 6px;font-size:18px;}
+    .drop p{margin:4px 0;font-size:13px;color:#555;}
+
     .flash { animation: flash 1s ease-in-out 3; }
-    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
-    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
+    @keyframes flash {
+      0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); }
+      50% { filter: drop-shadow(0 0 10px rgba(255,0,0,.85)); }
+      100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); }
+    }
 
-    .btnseg { display:inline-flex; gap:6px; }
-    .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
-    .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
-
-    .sparkline { margin-top:6px; }
+    /* sparkline */
+    .sparkline { margin-top:8px; }
     .sparkline text { font-size:10px; fill:#555; }
-    .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
+
+    /* tooltip overflow safety */
+    .leaflet-tooltip,
+    .leaflet-tooltip .leaflet-tooltip-content,
+    .sparkline { overflow: visible; }
   </style>
 </head>
 <body>
@@ -39,48 +60,57 @@
     <h1>Florida ZIP Volume Map</h1>
 
     <div class="row">
-      <label>Date:
-        <select id="day"></select>
+      <label style="display:flex;align-items:center;gap:8px;">
+        Date:
+        <select id="dateSel"></select>
       </label>
-      <div class="btnseg" id="rangeBtns">
-        <button class="seg" id="btn1w">1W</button>
-        <button class="seg" id="btn1m">1M</button>
-        <button class="seg" id="btnMax">MAX</button>
-      </div>
+
+      <a class="btn ghost" id="range1w">1W</a>
+      <a class="btn ghost" id="range1m">1M</a>
+      <a class="btn ghost" id="rangeMax">MAX</a>
     </div>
 
     <div class="row">
-      <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
+      <input class="input" id="searchZip" placeholder="ZIP (prefix or full)" maxlength="5" style="width:160px;" />
       <a class="btn" id="doSearch">Search</a>
       <a class="btn" id="exportCsv">Export daily CSV</a>
     </div>
 
     <div class="row">
-      <label>Threshold highlight:
-        <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
+      <label style="display:flex;align-items:center;gap:8px;">
+        Threshold highlight:
+        <input class="input" style="width:120px" id="threshold" type="number" placeholder=">= value" />
       </label>
       <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
+    </div>
+
+    <div class="row">
+      <a class="btn ghost" id="pickDailyCsv">Import daily CSV(s)</a>
+      <a class="btn ghost" id="pickGeo">Import GeoJSON</a>
+      <a class="btn ghost" id="clearFocusBtn">Clear focus</a>
+    </div>
+
+    <div class="hint">
+      Put <code>fl_florida_zip_codes_geo.min.json</code> next to <code>index.html</code> to auto-load,
+      or click “Import GeoJSON”. CSV columns: <b>Zipcodes</b> + (<b>Quantity</b>/<b>pred_quantity</b>/<b>货量</b>/<b>数量</b>) and a date column (or date in filename).
     </div>
   </div>
 
   <div id="map"></div>
 
+  <div class="drop" id="drop">
+    <h2>Drop CSV or GeoJSON here</h2>
+    <p>Supports multiple CSVs (different dates) and one GeoJSON.</p>
+  </div>
+
+  <input type="file" id="csvPicker" multiple accept=".csv" style="display:none" />
+  <input type="file" id="geoPicker" accept=".json,.geojson" style="display:none" />
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
   <script>
-    // ====== Configure your GitHub repository here ======
-    const GH_OWNER  = 'BeanSauce-hub';
-    const GH_REPO   = 'zipcodeMap';
-    const GH_BRANCH = 'main';
-    // ===================================================
-
-    // ---------- Global state ----------
-    let windowMode = '1W'; // default to 1-week window
-    const daily = {};      // { 'YYYY-MM-DD': { 'zip': value } }
-    let daysList = [];     // ['2025-08-11', ...]
-    const breaks = {};     // { day: [q20,q40,q60,q80] }
-
-    // ---------- Utils ----------
+    // -------------------- Utils --------------------
     function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
     function normZip(z){
       let s = String(z ?? '').trim();
@@ -98,168 +128,97 @@
     function parseCsv(text){
       const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
       const rows = out.data.map(r=>{
-        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim?.()] = String(r[k] ?? '').trim(); });
+        const obj = {};
+        Object.keys(r).forEach(k=> obj[(k||'').trim()] = String(r[k] ?? '').trim());
         return obj;
       });
       const headers = out.meta.fields || [];
       return { headers, rows };
     }
-    function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
-    // ---------- Mini sparkline chart ----------
-    function buildSparklineSVG(zip, currentDay, daysList) {
-      const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
-      const allDays = sortDatesAsc(daysList);
-      if (!allDays.length) return "";
-
-      // UTC date helpers
-      const addDaysUTC = (iso, n) => {
-        const [y,m,d] = iso.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, m-1, d + n));
-        return dt.toISOString().slice(0,10);
-      };
-      const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
-
-      // End date
-      const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
-
-      // Window span
-      const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
-
-      // Continuous date sequence
-      let fullDays;
-      if (span) {
-        const start = addDaysUTC(endDay, -(span - 1));
-        fullDays = rangeDaysUTC(start, endDay);
-      } else {
-        fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
+    // Try find date column or infer from filename
+    function inferDateFromFilename(name){
+      // match YYYY-MM-DD
+      const m = name.match(/(20\d{2})[-_\.](\d{2})[-_\.](\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      return null;
+    }
+    function findDateKey(headers){
+      const lower = headers.map(h => (h||'').trim().toLowerCase());
+      const cand = ['date','day','ds','order_date','ship_date','delivery_date'];
+      for (const c of cand){
+        const idx = lower.indexOf(c);
+        if (idx !== -1) return headers[idx];
       }
-
-      const vals = fullDays.map(d => {
-        const v = daily[d]?.[zip];
-        return (v == null || Number.isNaN(v)) ? null : Number(v);
-      });
-
-      const valid = vals.filter(v => v != null);
-      if (valid.length < 2) return "";
-
-      // y-axis: start at 0, keep 5% headroom
-      const minV = 0;
-      const maxData = Math.max(...valid, 0);
-      const maxV = maxData * 1.05 || 1;
-
-      // Canvas and plot area
-      const W = 300, H = 100;
-      const GUTTER_LEFT = 56;
-      const PAD_X = 14, PAD_Y = 18;
-      const plotX0 = GUTTER_LEFT + PAD_X;
-      const plotX1 = W - PAD_X - 6;
-      const plotW  = plotX1 - plotX0;
-
-      const xs = fullDays.map((_, i) =>
-        plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
-      );
-      const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
-
-      // Line (break on missing; no dots)
-      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-      let d = "";
-      for (let i=0;i<points.length;i++){
-        const p = points[i]; if (!p) continue;
-        if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+      // fuzzy includes
+      for (let i=0;i<lower.length;i++){
+        if (lower[i].includes('date')) return headers[i];
       }
-
-      // X-axis tick strategy
-      const wantLabelIdx = [];
-      if (mode === '1W') {
-        for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
-      } else if (mode === '1M') {
-        for (let i=0; i<fullDays.length; i++) {
-          const day = parseInt(fullDays[i].slice(8,10), 10);
-          if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
-        }
-      } else { // MAX
-        for (let i=0; i<fullDays.length; i++) {
-          const day = parseInt(fullDays[i].slice(8,10), 10);
-          if (day === 1) wantLabelIdx.push(i);
-        }
-        // thin to max 8 ticks
-        const MAX_TICKS = 8;
-        if (wantLabelIdx.length > MAX_TICKS) {
-          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
-          const slim = [];
-          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
-          wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
-        }
-      }
-
-      const fmtTick = (iso) => {
-        const m = parseInt(iso.slice(5,7), 10);
-        const d = parseInt(iso.slice(8,10), 10);
-        if (d === 1) return `${m}-1`;
-        return `${d}`;
-      };
-      const xLabels = wantLabelIdx.map(i =>
-        `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
-      ).join("");
-
-      // Reference lines + min/max labels (min fixed at 0)
-      const minY = yScale(minV), maxY = yScale(maxData);
-      const guides = `
-        <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
-        <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
-        <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${Math.round(maxData)}</text>
-        <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
-              style="paint-order: stroke; stroke-width: 3px; stroke: #fff;" fill="#666">0</text>
-      `;
-
-      return `
-        <div class="sparkline">
-          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-            <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
-            ${guides}
-            <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            ${xLabels}
-          </svg>
-        </div>
-      `;
+      return null;
+    }
+    function normalizeDateStr(s){
+      const t = String(s||'').trim();
+      // accept YYYY-MM-DD or YYYY/MM/DD
+      const m = t.match(/(20\d{2})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+      if (!m) return null;
+      const mm = String(m[2]).padStart(2,'0');
+      const dd = String(m[3]).padStart(2,'0');
+      return `${m[1]}-${mm}-${dd}`;
     }
 
-    function buildTooltipHTML(zip, currentDay) {
-      const val = daily[currentDay]?.[zip];
-      const valHtml = (val == null || Number.isNaN(val))
-        ? '<span style="color:#999">—</span>'
-        : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
-      const trend = buildSparklineSVG(zip, currentDay, Object.keys(daily));
-      return `
-        <div><b>ZIP:</b> ${zip}</div>
-        <div style="margin-top:4px"><b>${currentDay}</b>: ${valHtml}</div>
-        ${trend}
-      `;
-    }
+    // -------------------- App state --------------------
+    // daily[date][zip] = value
+    const daily = {}; // { '2025-09-25': { '33143': 193, ... } }
+    const breaksByDate = {}; // date -> [q20,q40,q60,q80]
+    let geoLayer = null;
+    const layerByZip = {};
+    let focusedZip = null;
+    let focusWired = false;
 
-    // ---------- Map ----------
+    // -------------------- Map --------------------
     const map = L.map('map').setView([27.8, -81.7], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
     map.zoomControl.setPosition('bottomleft');
 
-    const info = L.control();
+    const legend = L.control({position:'bottomright'});
+    legend.onAdd = function(){ this._div = L.DomUtil.create('div','legend'); this.update(); return this._div; };
+    legend.update = function(){
+      const d = dateSel.value;
+      const b = breaksByDate[d] || [0,0,0,0];
+      const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
+      const labels = [
+        `${fmt(0)} – ${fmt(b[0])}`,
+        `${fmt(b[0])} – ${fmt(b[1])}`,
+        `${fmt(b[1])} – ${fmt(b[2])}`,
+        `${fmt(b[2])} – ${fmt(b[3])}`,
+        `>${fmt(b[3])}`
+      ];
+      let html = '<b>Color Legend</b><br/>';
+      for (let i=0;i<labels.length;i++){
+        html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
+      }
+      this._div.innerHTML = html;
+    };
+    legend.addTo(map);
+
+    const info = L.control({position:'topright'});
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) {
-        this._div.innerHTML = 'Hover over a ZIP area to view data';
-        return;
-      }
-      const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
-      const cur = daySel.value;
-      this._div.innerHTML = buildTooltipHTML(zip, cur);
+      if (!props) { this._div.innerHTML = 'Hover a ZIP area'; return; }
+      const zip = props.zip;
+      const d = dateSel.value;
+      this._div.innerHTML = buildTooltipHTML(zip, d);
     };
     info.addTo(map);
 
-    let geoLayer;
-    const layerByZip = {};
-    const daySel = document.getElementById('day');
+    // -------------------- UI elements --------------------
+    const csvPicker = document.getElementById('csvPicker');
+    const geoPicker = document.getElementById('geoPicker');
+    const pickDailyCsv = document.getElementById('pickDailyCsv');
+    const pickGeo = document.getElementById('pickGeo');
+    const clearFocusBtn = document.getElementById('clearFocusBtn');
+    const drop = document.getElementById('drop');
+
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
     const exportCsv = document.getElementById('exportCsv');
@@ -267,8 +226,15 @@
     const thresholdOn = document.getElementById('thresholdOn');
     const thresholdInput = document.getElementById('threshold');
 
-    function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
+    const dateSel = document.getElementById('dateSel');
+    const range1w = document.getElementById('range1w');
+    const range1m = document.getElementById('range1m');
+    const rangeMax = document.getElementById('rangeMax');
 
+    // -------------------- Color + Style --------------------
+    function getZipFromFeature(f){
+      return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0');
+    }
     function getColor(d, b) {
       if (d == null) return '#f2f2f2';
       if (d <= b[0]) return '#ffffcc';
@@ -283,209 +249,383 @@
       if (!isFinite(t)) return false;
       return (Number(val)||0) >= t;
     }
-
     function styleFeature(feature){
       const z = getZipFromFeature(feature);
-      const d = daySel.value;
-      const val = (daily[d] && daily[d][z] != null) ? daily[d][z] : null;
-      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
-      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
+      const d = dateSel.value;
+      const val = daily[d]?.[z] ?? null;
+      const b = breaksByDate[d] || [0,0,0,0];
+      const base = { weight: 0.7, opacity: 1, color: '#555', fillOpacity: 0.82, fillColor: getColor(val, b) };
+      if (overThreshold(val)) { base.color = '#111'; base.weight = 2.0; }
       return base;
     }
-    function highlightFeature(e){
-      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
-      const z=getZipFromFeature(layer.feature);
-      info.update({ ZCTA5CE10:z });
-    }
-    function resetHighlight(e){ geoLayer.resetStyle(e.target); info.update(); }
-    function onEachFeature(feature,layer){
-      const z = getZipFromFeature(feature);
-      layerByZip[z] = layer;
-      layer.on({mouseover:highlightFeature, mouseout:resetHighlight, click:highlightFeature});
-      layer.bindTooltip(() => buildTooltipHTML(z, daySel.value), { sticky: true });
-    }
 
+    // -------------------- Sparkline --------------------
+    function getAllDatesSorted(){
+      return Object.keys(daily).sort();
+    }
     function computeBreaks(values){
-      const vals = values.filter(v=>v>0 && isFinite(v)).sort((a,b)=>a-b);
+      const vals = values.filter(v => v>0 && isFinite(v)).sort((a,b)=>a-b);
       if (!vals.length) return [0,0,0,0];
       const q = p => vals[Math.floor(p*(vals.length-1))];
       return [q(.2), q(.4), q(.6), q(.8)];
     }
-    function updateBreaksFor(day){
-      const vals = Object.values(daily[day]||{}).map(v=>+v||0);
-      breaks[day] = computeBreaks(vals);
-    }
-    function refreshMap(){
-      const d = daySel.value;
-      if (!d || !geoLayer) return;
-      updateBreaksFor(d);
-      geoLayer.setStyle(styleFeature);
-      legend.update();
-      info.update(info._lastProps);
+    function updateBreaksForDate(date){
+      const vals = Object.values(daily[date] || {}).map(v => +v || 0);
+      breaksByDate[date] = computeBreaks(vals);
     }
 
-    const legend=L.control({position:'bottomright'});
-    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
-    legend.update=function(){
-      const d = daySel.value; const b = breaks[d]||[0,0,0,0];
-      const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
-      const labels = [
-        `${fmt(0)} – ${fmt(b[0])}`,
-        `${fmt(b[0])} – ${fmt(b[1])}`,
-        `${fmt(b[1])} – ${fmt(b[2])}`,
-        `${fmt(b[2])} – ${fmt(b[3])}`,
-        `>${fmt(b[3])}`
-      ];
-      let html = '<b>Color Legend</b><br/>';
-      for (let i=0; i<labels.length; i++) {
-        html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${labels[i]}<br/>`;
+    function buildSparklineSVG(zip, currentDate) {
+      const dates = getAllDatesSorted();
+      if (dates.length < 2) return "";
+
+      const W = 250, H = 90;
+      const GUTTER_LEFT = 52;
+      const PAD_X = 12, PAD_Y = 18;
+
+      const plotX0 = GUTTER_LEFT + PAD_X;
+      const plotX1 = W - PAD_X;
+      const plotW  = plotX1 - plotX0;
+
+      // optional range filter (1W / 1M / MAX)
+      const range = window.__rangeMode || 'MAX';
+      let useDates = dates;
+      if (range === '1W' && dates.length > 7) useDates = dates.slice(-7);
+      if (range === '1M' && dates.length > 30) useDates = dates.slice(-30);
+
+      const xs = useDates.map((_, i) => plotX0 + i * (plotW) / Math.max(1, (useDates.length - 1)));
+      const vals = useDates.map(d => {
+        const v = daily[d]?.[zip];
+        return (v == null || Number.isNaN(v)) ? null : Number(v);
+      });
+      const valid = vals.filter(v => v != null);
+      if (valid.length < 2) return "";
+
+      const minV = Math.min(...valid), maxV = Math.max(...valid);
+      const span = (maxV - minV) || 1;
+      const yScale = v => H - PAD_Y - ((v - minV) / span) * (H - 2 * PAD_Y);
+
+      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v), d: useDates[i], v }));
+
+      let dpath = "";
+      for (let i=0;i<points.length;i++){
+        const p = points[i]; if (!p) continue;
+        if (i===0 || !points[i-1]) dpath += `M ${p.x} ${p.y}`; else dpath += ` L ${p.x} ${p.y}`;
       }
-      this._div.innerHTML = html;
-    };
-    legend.addTo(map);
 
-    // remember last props
-    const _origInfoUpdate = info.update.bind(info);
-    info.update = function(props){ this._lastProps = props || this._lastProps; _origInfoUpdate(this._lastProps); };
+      const dots = points.map(p=>{
+        if (!p) return "";
+        const isCur = (p.d === currentDate);
+        const r = isCur ? 4 : 2.5;
+        const stroke = isCur ? "#111" : "#666";
+        const fill = isCur ? "#ffd966" : "#fff";
+        return `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
+      }).join("");
 
-    // Auto load local GeoJSON (Florida ZIP polygons)
-    (async function autoLoadLocalGeo(){
-      try {
-        const r = await fetch('./fl_florida_zip_codes_geo.min.json', {cache:'no-store'});
-        if (!r.ok) throw new Error('HTTP '+r.status);
-        const gj = await r.json();
-        renderGeo(gj);
-      } catch (e) { console.warn('Auto-loading local GeoJSON failed:', e); }
-    })();
+      const xAxisY = H - PAD_Y;
+
+      // x labels: show only day-of-month for compact view
+      const xLabels = useDates.map((d, i) => {
+        const day = d.slice(-2).replace(/^0/,'');
+        // thin labels: show every ~5 points if many
+        const step = useDates.length > 12 ? Math.ceil(useDates.length/6) : 1;
+        if (i % step !== 0 && i !== useDates.length-1) return '';
+        return `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${day}</text>`;
+      }).join("");
+
+      const minY = yScale(minV), maxY = yScale(maxV);
+      const yGuides = `
+        <line x1="${plotX0}" y1="${maxY}" x2="${plotX1}" y2="${maxY}" stroke="#eee"/>
+        <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
+        <text x="${GUTTER_LEFT - 6}" y="${maxY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${fmt(maxV)}</text>
+        <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
+              style="paint-order: stroke; stroke: #fff; stroke-width: 3px;" fill="#666">${fmt(minV)}</text>
+      `;
+
+      return `
+        <div class="sparkline">
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+            <line x1="${plotX0}" y1="${xAxisY}" x2="${plotX1}" y2="${xAxisY}" stroke="#ccc"/>
+            ${yGuides}
+            <path d="${dpath}" fill="none" stroke="#d62728" stroke-width="2"/>
+            ${dots}
+            ${xLabels}
+          </svg>
+        </div>
+      `;
+    }
+
+    function buildTooltipHTML(zip, currentDate){
+      const v = daily[currentDate]?.[zip];
+      const val = (v==null) ? '—' : fmt(v);
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;">
+          <div>
+            <div><b>ZIP:</b> ${zip}</div>
+            <div style="margin-top:4px;"><b>${currentDate}:</b> <span style="font-weight:700;background:rgba(255,230,150,.6);border-radius:4px;padding:0 4px;">${val}</span></div>
+          </div>
+        </div>
+        ${buildSparklineSVG(zip, currentDate)}
+      `;
+    }
+
+    // -------------------- Geo rendering --------------------
     function renderGeo(geojson){
       if (geoLayer) map.removeLayer(geoLayer);
-      geoLayer = L.geoJSON(geojson, { style: styleFeature, onEachFeature: onEachFeature }).addTo(map);
+      Object.keys(layerByZip).forEach(k => delete layerByZip[k]);
+
+      geoLayer = L.geoJSON(geojson, {
+        style: styleFeature,
+        onEachFeature: (feature, layer) => {
+          const z = getZipFromFeature(feature);
+          layerByZip[z] = layer;
+
+          layer.on({
+            mouseover: (e)=> {
+              const lyr = e.target;
+              lyr.setStyle({weight: 2.5, color:'#000', fillOpacity:0.9});
+              lyr.bringToFront();
+              info.update({ zip: z });
+            },
+            mouseout: (e)=> {
+              if (!geoLayer) return;
+              // restore base style, then re-apply focus if exists
+              geoLayer.resetStyle(e.target);
+              if (focusedZip) applyFocusStyles();
+            },
+            click: (e)=> {
+              info.update({ zip: z });
+            }
+          });
+
+          layer.bindTooltip(() => buildTooltipHTML(z, dateSel.value), { sticky: true });
+        }
+      }).addTo(map);
+
       map.fitBounds(geoLayer.getBounds());
+
+      // wire clear focus on background click (only once)
+      if (!focusWired) {
+        focusWired = true;
+        map.on('click', (e) => {
+          const t = e.originalEvent?.target;
+          const clickedOnPath = t && (t.tagName === 'PATH' || t.tagName === 'path');
+          if (!clickedOnPath) clearFocus();
+        });
+      }
+
       refreshMap();
     }
 
-    // ---------- GitHub API: list CSVs in data/ directory ----------
-    async function fetchCsvDatesFromGitHub() {
-      const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
-      const r = await fetch(api, { cache: 'no-store' });
-      if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-      const data = await r.json();
-      const dates = (data.tree || [])
-        .filter(n => n.type === 'blob' && /^data\/\d{4}-\d{2}-\d{2}\.csv$/i.test(n.path))
-        .map(n => n.path.replace(/^data\//, '').replace(/\.csv$/i, ''))
-        .sort((a,b)=> a.localeCompare(b));
-      return dates;
+    // -------------------- Focus highlight logic --------------------
+    function applyFocusStyles(){
+      if (!geoLayer || !focusedZip) return;
+      geoLayer.eachLayer(l => {
+        const z = getZipFromFeature(l.feature);
+        const isTarget = (z === focusedZip);
+
+        if (isTarget) {
+          l.setStyle({
+            opacity: 1,
+            fillOpacity: 0.95,
+            weight: 3,
+            color: '#000'
+          });
+          l.bringToFront();
+          const el = l.getElement();
+          if (el) { el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
+        } else {
+          l.setStyle({
+            opacity: 0.20,
+            fillOpacity: 0.12,
+            weight: 0.7,
+            color: '#777'
+          });
+        }
+      });
     }
 
-    // Load one daily CSV from data/
-    async function fetchDayCsv(dayISO){
-      const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
-      if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
-      const text = await r.text();
-      const { headers, rows } = parseCsv(text);
-      const lowerHeaders = headers.map(h=>h?.trim?.().toLowerCase());
+    function clearFocus(){
+      focusedZip = null;
+      if (!geoLayer) return;
+      geoLayer.setStyle(styleFeature);
+    }
 
-      let zipKey=null, valKey=null;
+    // -------------------- Data loading (daily CSV) --------------------
+    function mergeDailyRows(rows, headers, fileName){
+      // detect zip key
+      const lower = headers.map(h => (h||'').trim().toLowerCase());
+      let zipKey = null;
       for (const a of ['zipcodes','zip','zipcode','zip_code']){
-        const idx = lowerHeaders.indexOf(a);
-        if (idx!==-1){ zipKey = headers[idx]; break; }
+        const idx = lower.indexOf(a);
+        if (idx !== -1){ zipKey = headers[idx]; break; }
       }
-      for (const a of ['quantity','pred_quantity','数量','货量']){
-        const idx = lowerHeaders.indexOf(a);
-        if (idx!==-1){ valKey = headers[idx]; break; }
-      }
-      if (!zipKey || !valKey) throw new Error("CSV missing ZIP or quantity column");
+      if (!zipKey) throw new Error('Missing ZIP column (Zipcodes/ZIP/Zip/Zip_Code)');
 
-      daily[dayISO] = {};
+      // detect value key
+      let valKey = null;
+      for (const a of ['pred_quantity','quantity','数量','货量','volume','count']){
+        const idx = lower.indexOf(a);
+        if (idx !== -1){ valKey = headers[idx]; break; }
+      }
+      if (!valKey) throw new Error('Missing value column (Quantity/pred_quantity/货量/数量)');
+
+      // date
+      const dateKey = findDateKey(headers);
+      const fileDate = inferDateFromFilename(fileName);
+
       rows.forEach(r=>{
         const z = normZip(r[zipKey]);
-        const v = Number(String(r[valKey]).replace(/,/g,'')) || 0;
-        if (z && z!=='00000') daily[dayISO][z] = v;
+        if (!z || z === '00000') return;
+
+        const v = Number(String(r[valKey] ?? '').replace(/,/g,'')) || 0;
+
+        let d = null;
+        if (dateKey) d = normalizeDateStr(r[dateKey]);
+        if (!d && fileDate) d = fileDate;
+
+        if (!d) return; // can't place without date
+        daily[d] ||= {};
+        daily[d][z] = v; // overwrite same (date,zip)
       });
     }
 
-    async function loadAllFromRepo(){
-      try{
-        daySel.disabled = true;
-        const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
-        daysList = [];
-        for (const d of list) {
-          await fetchDayCsv(d);
-          daysList.push(d);
-        }
-        renderDayOptions();
-        refreshMap();
-      }catch(e){
-        console.error(e);
-        alert('Failed to load data from repository: ' + e.message);
-      }finally{
-        daySel.disabled = false;
-      }
-    }
-
-    function renderDayOptions(){
-      const sel = daySel;
-      const cur = sel.value;
-      sel.innerHTML = '';
-      daysList.forEach(d=>{
+    function rebuildDateSelector(){
+      const dates = getAllDatesSorted();
+      dateSel.innerHTML = '';
+      dates.forEach(d=>{
         const opt = document.createElement('option');
-        opt.value = d; opt.textContent = d;
-        sel.appendChild(opt);
+        opt.value = d;
+        opt.textContent = d;
+        dateSel.appendChild(opt);
       });
-      if (daysList.length){
-        sel.value = daysList.includes(cur) ? cur : daysList[daysList.length-1];
-      }
+      if (dates.length) dateSel.value = dates[dates.length - 1];
     }
 
-    // Search & Export
-    function focusZip(query){
-      if (!geoLayer) { alert('Please load the map first.'); return; }
-      const q = (query||'').trim(); if (!q) return;
-      const target = Object.keys(layerByZip).find(z => z.startsWith(q));
-      if (!target) { alert('No matching ZIP found.'); return; }
-      const layer = layerByZip[target];
-      map.fitBounds(layer.getBounds(), {maxZoom: 10});
-      const el = layer.getElement();
-      if (el){ el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
-      layer.openTooltip();
+    // -------------------- Refresh map --------------------
+    function refreshMap(){
+      const d = dateSel.value;
+      if (d) updateBreaksForDate(d);
+      if (geoLayer) geoLayer.setStyle(styleFeature);
+      legend.update();
+      if (focusedZip) applyFocusStyles(); // keep focus after restyle
     }
+
+    // -------------------- UI events --------------------
+    pickDailyCsv.addEventListener('click', ()=> csvPicker.click());
+    csvPicker.addEventListener('change', e => handleFiles(e.target.files));
+
+    pickGeo.addEventListener('click', ()=> geoPicker.click());
+    geoPicker.addEventListener('change', e=>{
+      const f = e.target.files[0]; if (!f) return;
+      const fr = new FileReader();
+      fr.onload = ()=>{ try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('GeoJSON parse failed: ' + err); } };
+      fr.readAsText(f);
+    });
+
+    clearFocusBtn.addEventListener('click', clearFocus);
+
     doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
-    searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
+    searchInput.addEventListener('keydown', e=>{ if (e.key === 'Enter') focusZip(searchInput.value); });
 
-    function exportCurrent(){
-      const d = daySel.value;
-      const obj = daily[d] || {};
-      const rows = Object.entries(obj).map(([zip, val]) => `${zip},${val}`);
-      const csv = ['Zipcodes,Quantity', ...rows].join('\n');
-      downloadText(`${d}_export.csv`, csv);
+    function focusZip(query){
+      if (!geoLayer) { alert('Load GeoJSON first.'); return; }
+      const q = (query||'').trim();
+      if (!q) return;
+      const target = Object.keys(layerByZip).find(z => z.startsWith(q));
+      if (!target) { alert('ZIP not found in GeoJSON.'); return; }
+
+      focusedZip = target;
+      applyFocusStyles();
+
+      const layer = layerByZip[target];
+      map.fitBounds(layer.getBounds(), {maxZoom: 11});
+      layer.openTooltip();
+      info.update({ zip: target });
     }
-    exportCsv.addEventListener('click', exportCurrent);
 
-    // Interactions to refresh map
-    daySel.addEventListener('change', refreshMap);
+    exportCsv.addEventListener('click', ()=>{
+      const dates = getAllDatesSorted();
+      const zips = new Set();
+      dates.forEach(d => Object.keys(daily[d]||{}).forEach(z=>zips.add(z)));
+      const zipList = Array.from(zips).sort();
+      const lines = ['date,zip,quantity'];
+      dates.forEach(d=>{
+        zipList.forEach(z=>{
+          const v = daily[d]?.[z];
+          if (v == null) return;
+          lines.push(`${d},${z},${v}`);
+        });
+      });
+      downloadText('daily_export.csv', lines.join('\n'));
+    });
+
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
-
-    // 1W / 1M / MAX toggle
-    const btn1w = document.getElementById('btn1w');
-    const btn1m = document.getElementById('btn1m');
-    const btnMax= document.getElementById('btnMax');
-
-    function syncRangeButtons(){
-      btn1w.classList.toggle('active', windowMode==='1W');
-      btn1m.classList.toggle('active', windowMode==='1M');
-      btnMax.classList.toggle('active', windowMode==='MAX');
-    }
-    btn1w.addEventListener('click', ()=>{ windowMode='1W'; syncRangeButtons(); refreshMap(); });
-    btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
-    btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
-
-    // On page load, automatically pull CSV list from data/ directory
-    document.addEventListener('DOMContentLoaded', async () => {
-      syncRangeButtons();
-      await loadAllFromRepo().catch(e => console.warn('Initial load failed:', e));
+    dateSel.addEventListener('change', ()=>{
+      refreshMap();
+      // update open tooltip content live
+      if (focusedZip && layerByZip[focusedZip]) {
+        info.update({ zip: focusedZip });
+      }
     });
+
+    range1w.addEventListener('click', ()=> { window.__rangeMode='1W'; range1w.classList.remove('ghost'); refreshMap(); if (focusedZip) info.update({zip:focusedZip}); });
+    range1m.addEventListener('click', ()=> { window.__rangeMode='1M'; refreshMap(); if (focusedZip) info.update({zip:focusedZip}); });
+    rangeMax.addEventListener('click', ()=> { window.__rangeMode='MAX'; refreshMap(); if (focusedZip) info.update({zip:focusedZip}); });
+
+    // drag drop
+    ['dragenter','dragover'].forEach(evt=>document.addEventListener(evt, e=>{
+      e.preventDefault(); e.stopPropagation(); drop.style.display='block';
+    }));
+    ['dragleave','drop'].forEach(evt=>drop.addEventListener(evt, e=>{
+      e.preventDefault(); e.stopPropagation();
+    }));
+    drop.addEventListener('drop', e=>{
+      handleFiles(e.dataTransfer.files);
+      drop.style.display='none';
+    });
+
+    function handleFiles(fileList){
+      const arr = Array.from(fileList);
+      arr.forEach(file=>{
+        const name = file.name.toLowerCase();
+        const fr = new FileReader();
+        fr.onload = ()=>{
+          if (name.endsWith('.csv')){
+            try{
+              const {headers, rows} = parseCsv(fr.result);
+              mergeDailyRows(rows, headers, file.name);
+              rebuildDateSelector();
+              // refresh breaks for current date
+              refreshMap();
+            }catch(err){
+              alert('CSV load failed: ' + err.message);
+            }
+          } else if (name.endsWith('.json') || name.endsWith('.geojson')){
+            try{ renderGeo(JSON.parse(fr.result)); }catch(err){ alert('GeoJSON parse failed: ' + err); }
+          }
+        };
+        fr.readAsText(file);
+      });
+    }
+
+    // -------------------- Auto-load local GeoJSON if present --------------------
+    (async function autoLoadLocalGeo(){
+      const url = './fl_florida_zip_codes_geo.min.json';
+      try {
+        const r = await fetch(url, {cache:'no-store'});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const gj = await r.json();
+        renderGeo(gj);
+        console.log('[GeoJSON] loaded:', url);
+      } catch (e) {
+        console.warn('[GeoJSON] auto-load failed:', e);
+      }
+    })();
+
+    // Init default range
+    window.__rangeMode = 'MAX';
   </script>
 </body>
 </html>
