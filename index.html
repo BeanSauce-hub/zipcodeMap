@@ -651,15 +651,45 @@
       globalCleanBar.style.opacity = '1';
     }
 
-    function fadeOutCleanToast(){
-      // ✅ 3 seconds fade-out
+    let fadeRAF = null;
+
+    function fadeOutCleanToastLinear(durationMs = 3000){
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      if (fadeRAF) { cancelAnimationFrame(fadeRAF); fadeRAF = null; }
+    
       globalCleanBar.classList.remove('show');
       globalCleanBar.classList.add('fade');
-      hideTimer = setTimeout(() => {
-        globalCleanBar.style.display = 'none';
-        globalCleanBar.classList.remove('fade');
-        hideTimer = null;
-      }, 3000);
+    
+      // 确保从当前可见状态开始
+      globalCleanBar.style.display = 'block';
+      globalCleanBar.style.opacity = '1';
+    
+      const t0 = performance.now();
+      const startOpacity = 1;
+      const endOpacity = 0;
+    
+      const step = (now) => {
+        const t = (now - t0) / durationMs;
+        const clamped = Math.min(1, Math.max(0, t));
+        const cur = startOpacity + (endOpacity - startOpacity) * clamped; // 线性插值
+        globalCleanBar.style.opacity = String(cur);
+    
+        if (clamped < 1) {
+          fadeRAF = requestAnimationFrame(step);
+        } else {
+          fadeRAF = null;
+          globalCleanBar.style.display = 'none';
+          globalCleanBar.classList.remove('fade');
+          globalCleanBar.style.opacity = ''; // 清理 inline，避免下次显示异常
+        }
+      };
+    
+      fadeRAF = requestAnimationFrame(step);
+    }
+    
+    // ✅ 用这个替代你原来的 fadeOutCleanToast()
+    function fadeOutCleanToast(){
+      fadeOutCleanToastLinear(3000);
     }
 
     btnUploadClean.addEventListener('click', ()=> cleanPicker.click());
