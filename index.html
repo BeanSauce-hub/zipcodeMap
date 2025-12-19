@@ -13,7 +13,7 @@
       position: absolute; z-index: 1000; left: 10px; top: 10px;
       background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
-      max-width: 620px;
+      max-width: 540px;
     }
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
     .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
@@ -32,7 +32,6 @@
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
     .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
-    .pill { display:inline-block; padding:2px 6px; border-radius:999px; background:#f2f2f2; border:1px solid #ddd; font-size:12px; }
   </style>
 </head>
 <body>
@@ -53,7 +52,6 @@
     <div class="row">
       <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
       <a class="btn" id="doSearch">Search</a>
-      <a class="btn" id="clearFocus">Clear focus</a>
     </div>
 
     <div class="row">
@@ -62,31 +60,12 @@
       </label>
       <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
     </div>
-
-    <!-- ✅ 新增：上传 raw daily 文件（图一）并转成可读的 daily 聚合（图二） -->
-    <div class="row">
-      <a class="btn" id="uploadRawBtn">Upload raw daily file</a>
-      <label class="pill">Upload date:
-        <input class="input" id="uploadDate" type="date" style="padding:4px 6px;font-size:12px" />
-      </label>
-      <span class="hint" id="uploadStatus" style="margin:0"></span>
-      <input type="file" id="rawPicker" accept=".csv,.xlsx" style="display:none" />
-    </div>
-
-    <div class="hint">
-      Raw file (your Fig.1) → aggregated Fig.2 automatically.<br/>
-      ZIP column auto-detect: headers containing <b>邮编 / ZIP / zipcode / zip_code</b> (prefer “目的/收件/到达”).<br/>
-      Each row counts as 1 package. Result stored into the selected date (or Upload date if set).
-    </div>
   </div>
 
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <!-- ✅ 用于读取 Excel -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
-
   <script>
     // ====== Configure your GitHub repository here ======
     const GH_OWNER  = 'BeanSauce-hub';
@@ -123,13 +102,6 @@
       return { headers, rows };
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
-
-    function isoFromDateInput(v){
-      // v like "2025-12-19"
-      if (!v) return null;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-      return null;
-    }
 
     function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
@@ -326,7 +298,6 @@
     const daySel = document.getElementById('day');
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
-    const clearFocusBtn = document.getElementById('clearFocus');
 
     const thresholdOn = document.getElementById('thresholdOn');
     const thresholdInput = document.getElementById('threshold');
@@ -457,7 +428,7 @@
       return dates;
     }
 
-    // Load one daily CSV from data/  (already aggregated form)
+    // Load one daily CSV from data/
     async function fetchDayCsv(dayISO){
       const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
       if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
@@ -488,12 +459,7 @@
       try{
         daySel.disabled = true;
         const list = await fetchCsvDatesFromGitHub();
-        if (!list.length){
-          // no files is allowed; user may upload manually
-          daysList = [];
-          renderDayOptions();
-          return;
-        }
+        if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
         daysList = [];
         for (const d of list) {
           await fetchDayCsv(d);
@@ -509,16 +475,6 @@
       }
     }
 
-    function ensureDayInSelector(dayISO){
-      if (!dayISO) return;
-      if (!daysList.includes(dayISO)) {
-        daysList.push(dayISO);
-        daysList = daysList.sort((a,b)=>a.localeCompare(b));
-        renderDayOptions();
-      }
-      daySel.value = dayISO;
-    }
-
     function renderDayOptions(){
       const sel = daySel;
       const cur = sel.value;
@@ -530,16 +486,10 @@
       });
       if (daysList.length){
         sel.value = daysList.includes(cur) ? cur : daysList[daysList.length-1];
-      } else {
-        // if empty, still allow selecting an upload date later
-        const opt = document.createElement('option');
-        opt.value = ''; opt.textContent = '(upload a date)';
-        sel.appendChild(opt);
-        sel.value = '';
       }
     }
 
-    // Search (focus)
+    // Search
     function focusZip(query){
       if (!geoLayer) { alert('Please load the map first.'); return; }
       const q = (query||'').trim(); if (!q) return;
@@ -555,7 +505,6 @@
     }
     doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
     searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
-    clearFocusBtn.addEventListener('click', clearFocus);
 
     // Interactions to refresh map
     daySel.addEventListener('change', refreshMap);
@@ -576,127 +525,7 @@
     btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
     btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
 
-    // ---------- ✅ NEW: Upload raw daily (Fig.1) -> aggregate to Fig.2 ----------
-    const uploadRawBtn = document.getElementById('uploadRawBtn');
-    const rawPicker = document.getElementById('rawPicker');
-    const uploadDate = document.getElementById('uploadDate');
-    const uploadStatus = document.getElementById('uploadStatus');
-
-    uploadRawBtn.addEventListener('click', ()=> rawPicker.click());
-    rawPicker.addEventListener('change', async (e)=>{
-      const f = e.target.files?.[0];
-      if (!f) return;
-      try{
-        uploadStatus.textContent = 'Processing...';
-        const targetDay = isoFromDateInput(uploadDate.value) || daySel.value;
-        if (!targetDay){
-          uploadStatus.textContent = '';
-          alert('Please choose Upload date (or select a Date in dropdown) before uploading.');
-          return;
-        }
-
-        const rows = await readAnyToRows(f);     // rows: array of objects
-        const { zipKey } = detectZipKey(rows);   // find ZIP column in raw file
-        if (!zipKey){
-          uploadStatus.textContent = '';
-          alert('Cannot detect ZIP column.\nMake sure your header contains: 目的站点邮编 / 邮编 / ZIP / zipcode / zip_code');
-          return;
-        }
-
-        // Aggregate counts
-        const agg = {};
-        let used = 0, skipped = 0;
-
-        for (const r of rows){
-          const z = normZip(r[zipKey]);
-          if (!z || z === '00000' || z.length !== 5){
-            skipped++;
-            continue;
-          }
-          agg[z] = (agg[z] || 0) + 1;
-          used++;
-        }
-
-        daily[targetDay] = agg;
-        ensureDayInSelector(targetDay);
-        refreshMap();
-
-        uploadStatus.textContent = `Done. ${used} rows → ${Object.keys(agg).length} ZIPs (skipped: ${skipped})`;
-      }catch(err){
-        console.error(err);
-        uploadStatus.textContent = '';
-        alert('Upload failed: ' + (err?.message || String(err)));
-      }finally{
-        rawPicker.value = '';
-      }
-    });
-
-    async function readAnyToRows(file){
-      const name = (file.name || '').toLowerCase();
-      if (name.endsWith('.xlsx')){
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: 'array' });
-        const wsName = wb.SheetNames[0];
-        const ws = wb.Sheets[wsName];
-        // defval:'' keeps missing cells
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-        return rows;
-      }
-
-      // default CSV
-      const text = await file.text();
-      const { headers, rows } = parseCsv(text);
-      // If PapaParse failed to read headers (rare), try TSV fallback
-      if (!headers || !headers.length) {
-        // naive TSV
-        const lines = text.split(/\r?\n/).filter(x=>x.trim());
-        if (!lines.length) return [];
-        const head = lines[0].split('\t').map(s=>s.trim());
-        return lines.slice(1).map(line=>{
-          const parts = line.split('\t');
-          const obj = {};
-          head.forEach((h,i)=> obj[h]= (parts[i] ?? '').trim());
-          return obj;
-        });
-      }
-      return rows;
-    }
-
-    function detectZipKey(rows){
-      if (!rows || !rows.length) return { zipKey: null };
-
-      const keys = Object.keys(rows[0] || {});
-      const lower = keys.map(k => String(k).trim().toLowerCase());
-
-      // strong hints (prefer destination-related zip)
-      const strongCn = ['目的站点邮编','目的地邮编','收件邮编','到达邮编','目的邮编'];
-      for (const s of strongCn){
-        const idx = lower.indexOf(String(s).toLowerCase());
-        if (idx !== -1) return { zipKey: keys[idx] };
-      }
-
-      // heuristic: contains zip / 邮编
-      const candidates = [];
-      for (let i=0;i<keys.length;i++){
-        const k = keys[i];
-        const l = lower[i];
-        const score =
-          (l.includes('邮编') ? 50 : 0) +
-          (l.includes('zip') ? 40 : 0) +
-          (l.includes('zipcode') ? 40 : 0) +
-          (l.includes('zip_code') ? 40 : 0) +
-          (l.includes('目的') ? 30 : 0) +
-          (l.includes('目的地') ? 30 : 0) +
-          (l.includes('目的站') ? 30 : 0) +
-          (l.includes('收件') ? 20 : 0) +
-          (l.includes('到达') ? 20 : 0);
-        if (score > 0) candidates.push({ key: k, score });
-      }
-      candidates.sort((a,b)=>b.score-a.score);
-      return { zipKey: candidates[0]?.key || null };
-    }
-
-    // On page load
+    // On page load, automatically pull CSV list from data/ directory
     document.addEventListener('DOMContentLoaded', async () => {
       syncRangeButtons();
       await loadAllFromRepo().catch(e => console.warn('Initial load failed:', e));
