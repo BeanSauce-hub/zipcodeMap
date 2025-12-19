@@ -4,108 +4,36 @@
   <meta charset="utf-8" />
   <title>Florida ZIP Volume Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
   <style>
     html, body, #map { height: 100%; margin: 0; }
-
-    .legend {
-      background: white;
-      padding: 8px 10px;
-      border-radius: 8px;
-      box-shadow: 0 2px 6px rgba(0,0,0,.12);
-      line-height: 1.4;
-      font-size:12px;
-    }
-
+    .legend { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
+    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size:12px; }
     .panel {
-      position: absolute;
-      z-index: 1000;
-      left: 10px;
-      top: 10px;
-      background: rgba(255,255,255,.94);
-      padding: 10px 12px;
-      border-radius: 12px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      position: absolute; z-index: 1000; left: 10px; top: 10px;
+      background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
       max-width: 540px;
     }
-
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
+    .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
+    .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
+    select{ padding:4px 8px; border-radius:8px; }
+    .hint{font-size:12px;color:#666;margin-top:6px;}
+    .flash { animation: flash 1s ease-in-out 3; }
+    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
+    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
 
-    .panel .row {
-      display:flex;
-      gap:8px;
-      align-items:center;
-      flex-wrap:wrap;
-      margin-top:6px;
-    }
-
-    .btn {
-      display:inline-block;
-      padding:6px 10px;
-      border-radius:8px;
-      background:#111;
-      color:#fff;
-      cursor:pointer;
-      font-size:12px;
-    }
-
-    .input {
-      padding:6px 8px;
-      border-radius:8px;
-      border:1px solid #ddd;
-      font-size:13px;
-    }
-
-    select {
-      padding:4px 8px;
-      border-radius:8px;
-    }
-
-    .toggle {
-      display:flex;
-      align-items:center;
-      gap:6px;
-      font-size:12px;
-    }
-
-    .btnseg {
-      display:inline-flex;
-      gap:6px;
-    }
-
-    .btnseg .seg {
-      padding:4px 10px;
-      border-radius:8px;
-      border:1px solid #ccc;
-      background:#f7f7f7;
-      cursor:pointer;
-      font-size:12px;
-    }
-
-    .btnseg .seg.active {
-      background:#111;
-      color:#fff;
-      border-color:#111;
-    }
-
-    .flash {
-      animation: flash 1s ease-in-out 3;
-    }
-
-    @keyframes flash {
-      0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); }
-      50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); }
-      100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); }
-    }
+    .btnseg { display:inline-flex; gap:6px; }
+    .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
+    .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
 
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
-    .leaflet-tooltip { overflow: visible; }
+    .leaflet-tooltip, .leaflet-tooltip .leaflet-tooltip-content, .sparkline { overflow: visible; }
   </style>
 </head>
-
 <body>
 
 <div class="panel">
@@ -116,25 +44,27 @@
       <select id="day"></select>
     </label>
     <div class="btnseg">
-      <button class="seg active" id="btn1w">1W</button>
+      <button class="seg" id="btn1w">1W</button>
       <button class="seg" id="btn1m">1M</button>
       <button class="seg" id="btnMax">MAX</button>
     </div>
   </div>
 
   <div class="row">
-    <input class="input" id="searchZip" placeholder="Search ZIP" maxlength="5" />
-    <div class="btn" id="doSearch">Search</div>
-    <div class="btn" id="clearFocus">Clear</div>
+    <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
+    <a class="btn" id="doSearch">Search</a>
+    <a class="btn" id="clearFocus">Clear</a>
   </div>
 
   <div class="row">
-    <label>Threshold:
-      <input class="input" id="threshold" type="number" placeholder=">= value" />
+    <label>Threshold highlight:
+      <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
     </label>
-    <label class="toggle">
-      <input type="checkbox" id="thresholdOn" /> Enable
-    </label>
+    <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
+  </div>
+
+  <div class="hint">
+    Fast load: first loads latest <b>7 days</b>. 1M / MAX loads on demand.
   </div>
 </div>
 
@@ -144,81 +74,130 @@
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
 <script>
-  const GH_OWNER  = 'BeanSauce-hub';
-  const GH_REPO   = 'zipcodeMap';
-  const GH_BRANCH = 'main';
+/* ===================== CONFIG ===================== */
+const GH_OWNER  = 'BeanSauce-hub';
+const GH_REPO   = 'zipcodeMap';
+const GH_BRANCH = 'main';
 
-  let windowMode = '1W';
-  const daily = {};
-  let daysList = [];
-  const breaks = {};
-  const loadedDays = new Set();
+/* ===================== STATE ===================== */
+let windowMode = '1W';
+const daily = {};
+let daysList = [];
+const breaks = {};
+const loadedDays = new Set();
+let focusedZip = null;
+let focusWired = false;
 
-  let focusedZip = null;
-  let geoLayer;
-  const layerByZip = {};
+/* ===================== UTILS ===================== */
+function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
+function normZip(z){
+  let s = String(z ?? '').trim();
+  if (s.endsWith('.0')) s = s.slice(0,-2);
+  s = s.replace(/\D/g,'');
+  if (s.length > 5) s = s.slice(0,5);
+  return s.padStart(5,'0');
+}
 
-  function fmt(n){ return (Number(n)||0).toLocaleString(); }
-  function normZip(z){ return String(z).replace(/\D/g,'').padStart(5,'0'); }
+/* ===================== MAP ===================== */
+const map = L.map('map').setView([27.8, -81.7], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 12,
+  attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+map.zoomControl.setPosition('bottomleft');
 
-  function getColor(v,b){
-    if (v == null) return '#f2f2f2';
-    if (v <= b[0]) return '#ffffcc';
-    if (v <= b[1]) return '#ffeda0';
-    if (v <= b[2]) return '#feb24c';
-    if (v <= b[3]) return '#fd8d3c';
-    return '#e31a1c';
-  }
+/* ===================== INFO (HIDDEN) ===================== */
+const info = L.control();
+info.onAdd = function(){
+  this._div = L.DomUtil.create('div','info');
+  this._div.style.display = 'none';        // ★ CHANGED: hide hover hint
+  return this._div;
+};
+info.update = function(props){
+  if (!props || !this._div) return;
+};
+info.addTo(map);                            // keep mounted to avoid breaking logic
 
-  const map = L.map('map').setView([27.8, -81.7], 6);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom:12, attribution:'© OpenStreetMap'
-  }).addTo(map);
-  map.zoomControl.setPosition('bottomleft');
+/* ===================== LEGEND ===================== */
+const legend = L.control({position:'bottomright'});
+legend.onAdd = function(){
+  this._div = L.DomUtil.create('div','legend');
+  this.update();
+  return this._div;
+};
+legend.update = function(){
+  const d = daySel.value;
+  const b = breaks[d]||[0,0,0,0];
+  const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
+  const labels = [
+    `${fmt(0)} – ${fmt(b[0])}`,
+    `${fmt(b[0])} – ${fmt(b[1])}`,
+    `${fmt(b[1])} – ${fmt(b[2])}`,
+    `${fmt(b[2])} – ${fmt(b[3])}`,
+    `>${fmt(b[3])}`
+  ];
+  let html = '<b>Color Legend</b><br/>';
+  labels.forEach((l,i)=>{
+    html += `<i style="background:${colors[i]};width:14px;height:14px;display:inline-block;margin-right:6px;border:1px solid #999"></i>${l}<br/>`;
+  });
+  this._div.innerHTML = html;
+};
+legend.addTo(map);
 
-  function styleFeature(f){
-    const z = f.properties.ZCTA5CE10;
-    const d = document.getElementById('day').value;
-    const v = daily[d]?.[z];
-    return {
-      weight:.7,
-      color:'#555',
-      fillOpacity:.82,
-      fillColor:getColor(v, breaks[d]||[0,0,0,0])
-    };
-  }
+/* ===================== ELEMENTS ===================== */
+let geoLayer;
+const layerByZip = {};
+const daySel = document.getElementById('day');
+const searchInput = document.getElementById('searchZip');
+const doSearch = document.getElementById('doSearch');
+const clearBtn = document.getElementById('clearFocus');
+const thresholdOn = document.getElementById('thresholdOn');
+const thresholdInput = document.getElementById('threshold');
 
-  function onEachFeature(f,l){
-    const z = f.properties.ZCTA5CE10;
-    layerByZip[z] = l;
+/* ===================== LOAD DATA ===================== */
+async function fetchCsvDatesFromGitHub(){
+  const api = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
+  const r = await fetch(api);
+  const data = await r.json();
+  return (data.tree||[])
+    .filter(n=>n.type==='blob' && /^data\/\d{4}-\d{2}-\d{2}\.csv$/.test(n.path))
+    .map(n=>n.path.replace('data/','').replace('.csv',''))
+    .sort();
+}
 
-    l.bindTooltip(() => {
-      const d = document.getElementById('day').value;
-      const v = daily[d]?.[z];
-      return `<b>${z}</b><br>${d}: ${v ?? '—'}`;
-    }, {sticky:true});
-  }
+async function fetchDayCsv(day){
+  if (loadedDays.has(day)) return;
+  const r = await fetch(`./data/${day}.csv?ts=${Date.now()}`);
+  const text = await r.text();
+  const out = Papa.parse(text,{header:true,skipEmptyLines:true});
+  daily[day] = {};
+  out.data.forEach(r=>{
+    const z = normZip(r.zip || r.ZIP || r.zipcode);
+    const v = Number(r.quantity || r.Quantity || 0);
+    if (z) daily[day][z] = v;
+  });
+  loadedDays.add(day);
+}
 
-  fetch('./fl_florida_zip_codes_geo.min.json')
-    .then(r=>r.json())
-    .then(gj=>{
-      geoLayer = L.geoJSON(gj,{style:styleFeature,onEachFeature}).addTo(map);
-      map.fitBounds(geoLayer.getBounds());
-    });
+/* ===================== INIT ===================== */
+async function init(){
+  daysList = await fetchCsvDatesFromGitHub();
+  const last7 = daysList.slice(-7);
+  for (const d of last7) await fetchDayCsv(d);
 
-  // legend
-  const legend = L.control({position:'bottomright'});
-  legend.onAdd = function(){
-    const div = L.DomUtil.create('div','legend');
-    div.innerHTML = `
-      <b>Color Legend</b><br>
-      <i style="background:#ffffcc"></i> Low<br>
-      <i style="background:#e31a1c"></i> High
-    `;
-    return div;
-  };
-  legend.addTo(map);
+  daySel.innerHTML = '';
+  daysList.forEach(d=>{
+    const o=document.createElement('option');
+    o.value=d; o.textContent=d; daySel.appendChild(o);
+  });
+  daySel.value = last7[last7.length-1];
+}
+init();
+
+/* ===================== EVENTS ===================== */
+doSearch.onclick = ()=>{};
+clearBtn.onclick = ()=>{ focusedZip=null; };
+
 </script>
-
 </body>
 </html>
