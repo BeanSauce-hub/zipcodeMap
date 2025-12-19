@@ -12,7 +12,7 @@
     .panel {
       position: absolute; z-index: 1000; left: 10px; top: 10px;
       background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', sans-serif;
       max-width: 540px;
     }
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
@@ -20,14 +20,13 @@
     .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
     .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
     select{ padding:4px 8px; border-radius:8px; }
-    .hint{font-size:12px;color:#666;margin-top:6px;}
-    .flash { animation: flash 1s ease-in-out 3; }
-    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
-    .toggle { display:flex; align-items:center; gap:6px; font-size:12px; }
 
     .btnseg { display:inline-flex; gap:6px; }
     .btnseg .seg { padding:4px 10px; border-radius:8px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; font-size:12px; }
     .btnseg .seg.active { background:#111; color:#fff; border-color:#111; }
+
+    .flash { animation: flash 1s ease-in-out 3; }
+    @keyframes flash { 0% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } 50% { filter: drop-shadow(0 0 8px rgba(255,0,0,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(255,0,0,0)); } }
 
     .sparkline { margin-top:6px; }
     .sparkline text { font-size:10px; fill:#555; }
@@ -52,13 +51,6 @@
     <div class="row">
       <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
       <a class="btn" id="doSearch">Search</a>
-    </div>
-
-    <div class="row">
-      <label>Threshold highlight:
-        <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
-      </label>
-      <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
     </div>
   </div>
 
@@ -105,36 +97,23 @@
 
     function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
-
       geoLayer.eachLayer(l => {
         const z = getZipFromFeature(l.feature);
         const isTarget = (z === focusedZip);
 
         if (isTarget) {
-          l.setStyle({
-            opacity: 1,
-            fillOpacity: 0.95,
-            weight: 3,
-            color: '#000'
-          });
+          l.setStyle({ opacity: 1, fillOpacity: 0.95, weight: 3, color: '#000' });
           l.bringToFront();
-
           const el = l.getElement();
           if (el){
             el.classList.add('flash');
             setTimeout(()=> el.classList.remove('flash'), 1800);
           }
         } else {
-          l.setStyle({
-            opacity: 0.20,
-            fillOpacity: 0.12,
-            weight: 0.7,
-            color: '#777'
-          });
+          l.setStyle({ opacity: 0.20, fillOpacity: 0.12, weight: 0.7, color: '#777' });
         }
       });
     }
-
     function clearFocus(){
       focusedZip = null;
       if (!geoLayer) return;
@@ -156,13 +135,9 @@
       };
       const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
 
-      // End date
       const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
-
-      // Window span
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
 
-      // Continuous date sequence
       let fullDays;
       if (span) {
         const start = addDaysUTC(endDay, -(span - 1));
@@ -175,16 +150,13 @@
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
 
-      // y-axis: start at 0, keep 5% headroom
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
 
-      // Canvas and plot area
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
@@ -197,7 +169,6 @@
       );
       const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
 
-      // Line (break on missing; no dots)
       const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
       let d = "";
       for (let i=0;i<points.length;i++){
@@ -205,7 +176,6 @@
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
 
-      // X-axis tick strategy
       const wantLabelIdx = [];
       if (mode === '1W') {
         for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
@@ -214,12 +184,11 @@
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1 || day % 5 === 0) wantLabelIdx.push(i);
         }
-      } else { // MAX
+      } else {
         for (let i=0; i<fullDays.length; i++) {
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1) wantLabelIdx.push(i);
         }
-        // thin to max 8 ticks
         const MAX_TICKS = 8;
         if (wantLabelIdx.length > MAX_TICKS) {
           const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
@@ -239,7 +208,6 @@
         `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
       ).join("");
 
-      // Reference lines + min/max labels (min fixed at 0)
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -283,10 +251,7 @@
     const info = L.control();
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) {
-        this._div.innerHTML = 'Hover over a ZIP area to view data';
-        return;
-      }
+      if (!props) { this._div.innerHTML = 'Hover over a ZIP area to view data'; return; }
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
@@ -299,9 +264,6 @@
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
 
-    const thresholdOn = document.getElementById('thresholdOn');
-    const thresholdInput = document.getElementById('threshold');
-
     function getZipFromFeature(f){ return (f.properties.ZCTA5CE10 || f.properties.ZCTA5CE || f.properties.zip || '').toString().padStart(5,'0'); }
 
     function getColor(d, b) {
@@ -312,23 +274,17 @@
       if (d <= b[3]) return '#fd8d3c';
       return '#e31a1c';
     }
-    function overThreshold(val){
-      if (!thresholdOn.checked) return false;
-      const t = Number(thresholdInput.value);
-      if (!isFinite(t)) return false;
-      return (Number(val)||0) >= t;
-    }
 
     function styleFeature(feature){
       const z = getZipFromFeature(feature);
       const d = daySel.value;
       const val = (daily[d] && daily[d][z] != null) ? daily[d][z] : null;
-      const base = {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
-      if (overThreshold(val)) { base.color='#e31a1c'; base.weight=2; }
-      return base;
+      return {weight:.7, opacity:1, color:'#555', fillOpacity:.82, fillColor:getColor(val, breaks[d]||[0,0,0,0])};
     }
     function highlightFeature(e){
-      const layer = e.target; layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9}); layer.bringToFront();
+      const layer = e.target;
+      layer.setStyle({weight:2.5,color:'#000',fillOpacity:.9});
+      layer.bringToFront();
       const z=getZipFromFeature(layer.feature);
       info.update({ ZCTA5CE10:z });
     }
@@ -508,8 +464,6 @@
 
     // Interactions to refresh map
     daySel.addEventListener('change', refreshMap);
-    thresholdOn.addEventListener('change', refreshMap);
-    thresholdInput.addEventListener('change', refreshMap);
 
     // 1W / 1M / MAX toggle
     const btn1w = document.getElementById('btn1w');
