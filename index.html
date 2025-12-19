@@ -60,8 +60,8 @@
       transition: opacity .18s ease; /* 出现可以快一点 */
     }
     #globalCleanBar.fade {
-      opacity: 0;
-      transition: opacity 3s ease;  /* ✅ 3s fade-out */
+      opacity: 0;     /* 仅作为状态标记，真正的渐变由 JS 控制 */
+      transition: none;
     }
 
     #globalCleanBar .gcb-top{
