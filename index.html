@@ -183,7 +183,8 @@
       </div>
 
       <!-- hidden file input -->
-      <input type="file" id="cleanFilePicker" accept=".csv" style="display:none" />
+      <!-- ✅ changed accept to include xlsx -->
+      <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
     </div>
 
     <div class="hint" style="margin-top:10px">
@@ -196,6 +197,9 @@
   <!-- JS deps -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- ✅ NEW: SheetJS for XLSX -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <script>
     // ====== Configure your GitHub repository here ======
@@ -239,6 +243,28 @@
       return { headers, rows };
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
+
+    // ✅ NEW: header normalization + ZIP key resolver (zipcode/zip/邮编, case-insensitive)
+    function _normHeader(h){
+      return String(h ?? '').trim().toLowerCase().replace(/\s+/g,'');
+    }
+    function findZipKey(headers){
+      const mapNorm = new Map();
+      headers.forEach(h => mapNorm.set(_normHeader(h), h));
+      const targets = ['zipcode','zip','邮编'];
+
+      // exact
+      for (const t of targets){
+        if (mapNorm.has(t)) return mapNorm.get(t);
+      }
+      // contains fallback (e.g., "ZIP Code", "Zipcode(目的地)")
+      for (const [k, orig] of mapNorm.entries()){
+        if (k.includes('zipcode')) return orig;
+        if (k === 'zip') return orig;
+        if (k.includes('邮编')) return orig;
+      }
+      return null;
+    }
 
     // ---------- Focus dim/highlight ----------
     function getZipFromFeature(layerOrFeature){
@@ -722,6 +748,28 @@
 
     btnUploadClean.addEventListener('click', () => cleanFilePicker.click());
 
+    // ✅ NEW: parse CSV or XLSX into {headers, rows}
+    async function readTableFile(file){
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+
+      if (ext === 'csv'){
+        const rawText = await file.text();
+        return parseCsv(rawText);
+      }
+
+      if (ext === 'xlsx'){
+        const ab = await file.arrayBuffer();
+        const wb = XLSX.read(ab, {type:'array'});
+        const sheetName = wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+        const headers = Object.keys(rows[0] || {});
+        return { headers, rows };
+      }
+
+      throw new Error('Unsupported file type. Please upload .csv or .xlsx');
+    }
+
     cleanFilePicker.addEventListener('change', async (e) => {
       const f = e.target.files?.[0];
       if (!f) return;
@@ -734,28 +782,41 @@
       cleanProgressLabel.textContent = 'Cleaning…';
       cleanProgressPct.textContent = '0%';
 
-      // Read file (we’ll add real cleaning rules next)
-      const rawText = await f.text();
-
       // Mock progress animation (about 1.8s)
       let p = 0;
       const t0 = performance.now();
       const DURATION = 1800;
 
-      const tick = () => {
+      // kick off file read in parallel
+      const readPromise = (async ()=>{
+        const { headers, rows } = await readTableFile(f);
+        const zipKey = findZipKey(headers);
+        if (!zipKey) throw new Error('ZIP column not found (zipcode / ZIP / 邮编)');
+        return { headers, rows, zipKey };
+      })();
+
+      const tick = async () => {
         const t = performance.now();
-        p = Math.min(100, Math.round(((t - t0) / DURATION) * 100));
+        p = Math.min(99, Math.round(((t - t0) / DURATION) * 100));
         cleanProgressFill.style.width = p + '%';
         cleanProgressPct.textContent = p + '%';
 
-        if (p < 100) requestAnimationFrame(tick);
+        if (p < 99) requestAnimationFrame(tick);
         else {
-          // Placeholder “cleaned CSV” output — right now we do not transform;
-          // we keep hook ready for your next step.
-          // const cleanedCsv = cleanDailyRawCsv(rawText);
+          try{
+            const { rows, zipKey } = await readPromise;
 
-          cleanProgressLabel.textContent = 'Done (UI mock). Next: add cleaning rules.';
-          setTimeout(() => { /* keep it visible */ }, 300);
+            // placeholder: we only detect column now; cleaning rules next
+            cleanProgressFill.style.width = '100%';
+            cleanProgressPct.textContent = '100%';
+            cleanProgressLabel.textContent = `Done • ZIP column: ${zipKey} • rows: ${rows.length}`;
+          }catch(err){
+            cleanProgressLabel.textContent = 'Failed';
+            alert(err?.message || String(err));
+          }finally{
+            // allow uploading same file again
+            cleanFilePicker.value = '';
+          }
         }
       };
       requestAnimationFrame(tick);
