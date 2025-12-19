@@ -52,7 +52,6 @@
     <div class="row">
       <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
       <a class="btn" id="doSearch">Search</a>
-      <a class="btn" id="exportCsv">Export daily CSV</a>
     </div>
 
     <div class="row">
@@ -80,11 +79,31 @@
     let daysList = [];     // ['2025-08-11', ...]
     const breaks = {};     // { day: [q20,q40,q60,q80] }
 
-    // --- Focus highlight state (NEW) ---
+    // --- Focus highlight state ---
     let focusedZip = null;
     let focusWired = false;
 
-    function applyFocusStyles(){ // NEW
+    // ---------- Utils ----------
+    function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
+    function normZip(z){
+      let s = String(z ?? '').trim();
+      if (s.endsWith('.0')) s = s.slice(0,-2);
+      s = s.replace(/\D/g,'');
+      if (s.length > 5) s = s.slice(0,5);
+      return s.padStart(5,'0');
+    }
+    function parseCsv(text){
+      const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
+      const rows = out.data.map(r=>{
+        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim?.()] = String(r[k] ?? '').trim(); });
+        return obj;
+      });
+      const headers = out.meta.fields || [];
+      return { headers, rows };
+    }
+    function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
+
+    function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
 
       geoLayer.eachLayer(l => {
@@ -116,38 +135,12 @@
       });
     }
 
-    function clearFocus(){ // NEW
+    function clearFocus(){
       focusedZip = null;
       if (!geoLayer) return;
       geoLayer.setStyle(styleFeature);
       info.update();
     }
-
-    // ---------- Utils ----------
-    function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
-    function normZip(z){
-      let s = String(z ?? '').trim();
-      if (s.endsWith('.0')) s = s.slice(0,-2);
-      s = s.replace(/\D/g,'');
-      if (s.length > 5) s = s.slice(0,5);
-      return s.padStart(5,'0');
-    }
-    function downloadText(filename, text){
-      const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-    }
-    function parseCsv(text){
-      const out = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
-      const rows = out.data.map(r=>{
-        const obj = {}; Object.keys(r).forEach(k=>{ obj[k?.trim?.()] = String(r[k] ?? '').trim(); });
-        return obj;
-      });
-      const headers = out.meta.fields || [];
-      return { headers, rows };
-    }
-    function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
     // ---------- Mini sparkline chart ----------
     function buildSparklineSVG(zip, currentDay, daysList) {
@@ -305,7 +298,6 @@
     const daySel = document.getElementById('day');
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
-    const exportCsv = document.getElementById('exportCsv');
 
     const thresholdOn = document.getElementById('thresholdOn');
     const thresholdInput = document.getElementById('threshold');
@@ -343,7 +335,7 @@
     function resetHighlight(e){
       geoLayer.resetStyle(e.target);
       info.update();
-      if (focusedZip) applyFocusStyles(); // NEW: keep focus after hover out
+      if (focusedZip) applyFocusStyles();
     }
     function onEachFeature(feature,layer){
       const z = getZipFromFeature(feature);
@@ -369,8 +361,7 @@
       geoLayer.setStyle(styleFeature);
       legend.update();
       info.update(info._lastProps);
-
-      if (focusedZip) applyFocusStyles(); // NEW: keep focus after restyle
+      if (focusedZip) applyFocusStyles();
     }
 
     const legend=L.control({position:'bottomright'});
@@ -411,7 +402,7 @@
       geoLayer = L.geoJSON(geojson, { style: styleFeature, onEachFeature: onEachFeature }).addTo(map);
       map.fitBounds(geoLayer.getBounds());
 
-      // NEW: click blank area to clear focus (bind once)
+      // click blank area to clear focus (bind once)
       if (!focusWired){
         focusWired = true;
         map.on('click', (e) => {
@@ -498,33 +489,22 @@
       }
     }
 
-    // Search & Export
+    // Search
     function focusZip(query){
       if (!geoLayer) { alert('Please load the map first.'); return; }
       const q = (query||'').trim(); if (!q) return;
       const target = Object.keys(layerByZip).find(z => z.startsWith(q));
       if (!target) { alert('No matching ZIP found.'); return; }
 
-      focusedZip = target;    // NEW
-      applyFocusStyles();     // NEW
+      focusedZip = target;
+      applyFocusStyles();
 
       const layer = layerByZip[target];
       map.fitBounds(layer.getBounds(), {maxZoom: 10});
-      const el = layer.getElement();
-      if (el){ el.classList.add('flash'); setTimeout(()=> el.classList.remove('flash'), 1800); }
       layer.openTooltip();
     }
     doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
     searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
-
-    function exportCurrent(){
-      const d = daySel.value;
-      const obj = daily[d] || {};
-      const rows = Object.entries(obj).map(([zip, val]) => `${zip},${val}`);
-      const csv = ['Zipcodes,Quantity', ...rows].join('\n');
-      downloadText(`${d}_export.csv`, csv);
-    }
-    exportCsv.addEventListener('click', exportCurrent);
 
     // Interactions to refresh map
     daySel.addEventListener('change', refreshMap);
