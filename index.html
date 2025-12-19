@@ -80,6 +80,49 @@
     let daysList = [];     // ['2025-08-11', ...]
     const breaks = {};     // { day: [q20,q40,q60,q80] }
 
+    // --- Focus highlight state (NEW) ---
+    let focusedZip = null;
+    let focusWired = false;
+
+    function applyFocusStyles(){ // NEW
+      if (!geoLayer || !focusedZip) return;
+
+      geoLayer.eachLayer(l => {
+        const z = getZipFromFeature(l.feature);
+        const isTarget = (z === focusedZip);
+
+        if (isTarget) {
+          l.setStyle({
+            opacity: 1,
+            fillOpacity: 0.95,
+            weight: 3,
+            color: '#000'
+          });
+          l.bringToFront();
+
+          const el = l.getElement();
+          if (el){
+            el.classList.add('flash');
+            setTimeout(()=> el.classList.remove('flash'), 1800);
+          }
+        } else {
+          l.setStyle({
+            opacity: 0.20,
+            fillOpacity: 0.12,
+            weight: 0.7,
+            color: '#777'
+          });
+        }
+      });
+    }
+
+    function clearFocus(){ // NEW
+      focusedZip = null;
+      if (!geoLayer) return;
+      geoLayer.setStyle(styleFeature);
+      info.update();
+    }
+
     // ---------- Utils ----------
     function fmt(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(); }
     function normZip(z){
@@ -297,7 +340,11 @@
       const z=getZipFromFeature(layer.feature);
       info.update({ ZCTA5CE10:z });
     }
-    function resetHighlight(e){ geoLayer.resetStyle(e.target); info.update(); }
+    function resetHighlight(e){
+      geoLayer.resetStyle(e.target);
+      info.update();
+      if (focusedZip) applyFocusStyles(); // NEW: keep focus after hover out
+    }
     function onEachFeature(feature,layer){
       const z = getZipFromFeature(feature);
       layerByZip[z] = layer;
@@ -322,6 +369,8 @@
       geoLayer.setStyle(styleFeature);
       legend.update();
       info.update(info._lastProps);
+
+      if (focusedZip) applyFocusStyles(); // NEW: keep focus after restyle
     }
 
     const legend=L.control({position:'bottomright'});
@@ -361,6 +410,17 @@
       if (geoLayer) map.removeLayer(geoLayer);
       geoLayer = L.geoJSON(geojson, { style: styleFeature, onEachFeature: onEachFeature }).addTo(map);
       map.fitBounds(geoLayer.getBounds());
+
+      // NEW: click blank area to clear focus (bind once)
+      if (!focusWired){
+        focusWired = true;
+        map.on('click', (e) => {
+          const t = e.originalEvent?.target;
+          const clickedOnPath = t && (t.tagName === 'PATH' || t.tagName === 'path');
+          if (!clickedOnPath) clearFocus();
+        });
+      }
+
       refreshMap();
     }
 
@@ -444,6 +504,10 @@
       const q = (query||'').trim(); if (!q) return;
       const target = Object.keys(layerByZip).find(z => z.startsWith(q));
       if (!target) { alert('No matching ZIP found.'); return; }
+
+      focusedZip = target;    // NEW
+      applyFocusStyles();     // NEW
+
       const layer = layerByZip[target];
       map.fitBounds(layer.getBounds(), {maxZoom: 10});
       const el = layer.getElement();
