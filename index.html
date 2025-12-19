@@ -52,6 +52,7 @@
     <div class="row">
       <input class="input" id="searchZip" placeholder="Search ZIP (prefix or full)" maxlength="5" />
       <a class="btn" id="doSearch">Search</a>
+      <a class="btn" id="clearFocus">Clear</a>
     </div>
 
     <div class="row">
@@ -59,6 +60,10 @@
         <input class="input" style="width:100px" id="threshold" type="number" placeholder=">= value" />
       </label>
       <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
+    </div>
+
+    <div class="hint">
+      Fast load: first loads latest <b>7 days</b>. 1M / MAX loads on demand.
     </div>
   </div>
 
@@ -74,10 +79,11 @@
     // ===================================================
 
     // ---------- Global state ----------
-    let windowMode = '1W'; // default to 1-week window
-    const daily = {};      // { 'YYYY-MM-DD': { 'zip': value } }
-    let daysList = [];     // ['2025-08-11', ...]
-    const breaks = {};     // { day: [q20,q40,q60,q80] }
+    let windowMode = '1W';         // '1W' | '1M' | 'MAX'
+    const daily = {};              // { 'YYYY-MM-DD': { zip: value } }
+    let daysList = [];             // all available days in repo
+    const breaks = {};             // { day: [q20,q40,q60,q80] }
+    const loadedDays = new Set();  // which days have been fetched & parsed
 
     // --- Focus highlight state ---
     let focusedZip = null;
@@ -103,6 +109,19 @@
     }
     function sortDatesAsc(ds){ return ds.slice().sort((a,b)=> a.localeCompare(b)); }
 
+    // UTC date helpers
+    function addDaysUTC(iso, n){
+      const [y,m,d] = iso.split('-').map(Number);
+      const dt = new Date(Date.UTC(y, m-1, d + n));
+      return dt.toISOString().slice(0,10);
+    }
+    function rangeDaysUTC(a,b){
+      const out=[]; let cur=a;
+      while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1); }
+      return out;
+    }
+
+    // ---------- Focus styles ----------
     function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
 
@@ -111,12 +130,7 @@
         const isTarget = (z === focusedZip);
 
         if (isTarget) {
-          l.setStyle({
-            opacity: 1,
-            fillOpacity: 0.95,
-            weight: 3,
-            color: '#000'
-          });
+          l.setStyle({ opacity: 1, fillOpacity: 0.95, weight: 3, color: '#000' });
           l.bringToFront();
 
           const el = l.getElement();
@@ -125,16 +139,10 @@
             setTimeout(()=> el.classList.remove('flash'), 1800);
           }
         } else {
-          l.setStyle({
-            opacity: 0.20,
-            fillOpacity: 0.12,
-            weight: 0.7,
-            color: '#777'
-          });
+          l.setStyle({ opacity: 0.20, fillOpacity: 0.12, weight: 0.7, color: '#777' });
         }
       });
     }
-
     function clearFocus(){
       focusedZip = null;
       if (!geoLayer) return;
@@ -143,31 +151,20 @@
     }
 
     // ---------- Mini sparkline chart ----------
-    function buildSparklineSVG(zip, currentDay, daysList) {
-      const mode = (typeof windowMode === 'string' ? windowMode : '1W'); // '1W' | '1M' | 'MAX'
-      const allDays = sortDatesAsc(daysList);
+    function buildSparklineSVG(zip, currentDay, daysListAllLoadedOrNot) {
+      const mode = (typeof windowMode === 'string' ? windowMode : '1W');
+      const allDays = sortDatesAsc(Object.keys(daily)); // only loaded days
       if (!allDays.length) return "";
 
-      // UTC date helpers
-      const addDaysUTC = (iso, n) => {
-        const [y,m,d] = iso.split('-').map(Number);
-        const dt = new Date(Date.UTC(y, m-1, d + n));
-        return dt.toISOString().slice(0,10);
-      };
-      const rangeDaysUTC = (a,b) => { const out=[]; let cur=a; while(true){ out.push(cur); if(cur===b)break; cur=addDaysUTC(cur,1);} return out; };
-
-      // End date
-      const endDay = (currentDay && allDays.includes(currentDay)) ? currentDay : allDays[allDays.length - 1];
-
-      // Window span
+      const endDay = (currentDay && daysList.includes(currentDay)) ? currentDay : (daysList[daysList.length - 1] || allDays[allDays.length - 1]);
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
 
-      // Continuous date sequence
       let fullDays;
       if (span) {
         const start = addDaysUTC(endDay, -(span - 1));
         fullDays = rangeDaysUTC(start, endDay);
       } else {
+        // MAX: show only loaded range (will expand as you load more)
         fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
       }
 
@@ -205,7 +202,7 @@
         if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
       }
 
-      // X-axis tick strategy
+      // X-axis ticks
       const wantLabelIdx = [];
       if (mode === '1W') {
         for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
@@ -219,7 +216,6 @@
           const day = parseInt(fullDays[i].slice(8,10), 10);
           if (day === 1) wantLabelIdx.push(i);
         }
-        // thin to max 8 ticks
         const MAX_TICKS = 8;
         if (wantLabelIdx.length > MAX_TICKS) {
           const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
@@ -231,15 +227,15 @@
 
       const fmtTick = (iso) => {
         const m = parseInt(iso.slice(5,7), 10);
-        const d = parseInt(iso.slice(8,10), 10);
-        if (d === 1) return `${m}-1`;
-        return `${d}`;
+        const dd = parseInt(iso.slice(8,10), 10);
+        if (dd === 1) return `${m}-1`;
+        return `${dd}`;
       };
       const xLabels = wantLabelIdx.map(i =>
         `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
       ).join("");
 
-      // Reference lines + min/max labels (min fixed at 0)
+      // Reference lines + labels (min fixed at 0)
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -267,7 +263,7 @@
       const valHtml = (val == null || Number.isNaN(val))
         ? '<span style="color:#999">—</span>'
         : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
-      const trend = buildSparklineSVG(zip, currentDay, Object.keys(daily));
+      const trend = buildSparklineSVG(zip, currentDay, daysList);
       return `
         <div><b>ZIP:</b> ${zip}</div>
         <div style="margin-top:4px"><b>${currentDay}</b>: ${valHtml}</div>
@@ -283,10 +279,7 @@
     const info = L.control();
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) {
-        this._div.innerHTML = 'Hover over a ZIP area to view data';
-        return;
-      }
+      if (!props) { this._div.innerHTML = 'Hover over a ZIP area to view data'; return; }
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
@@ -298,6 +291,7 @@
     const daySel = document.getElementById('day');
     const searchInput = document.getElementById('searchZip');
     const doSearch = document.getElementById('doSearch');
+    const clearBtn = document.getElementById('clearFocus');
 
     const thresholdOn = document.getElementById('thresholdOn');
     const thresholdInput = document.getElementById('threshold');
@@ -430,6 +424,7 @@
 
     // Load one daily CSV from data/
     async function fetchDayCsv(dayISO){
+      if (loadedDays.has(dayISO)) return; // avoid re-fetch
       const r = await fetch(`./data/${dayISO}.csv?ts=` + Date.now(), {cache:'no-store'});
       if (!r.ok) throw new Error(`Failed to read data/${dayISO}.csv: ${r.status}`);
       const text = await r.text();
@@ -453,19 +448,54 @@
         const v = Number(String(r[valKey]).replace(/,/g,'')) || 0;
         if (z && z!=='00000') daily[dayISO][z] = v;
       });
+
+      loadedDays.add(dayISO);
     }
 
-    async function loadAllFromRepo(){
+    async function ensureDaysLoaded(dayArray){
+      const need = dayArray.filter(d => !loadedDays.has(d));
+      if (!need.length) return;
+
+      // simple & stable: serial
+      for (const d of need){
+        await fetchDayCsv(d);
+      }
+    }
+
+    async function ensureWindowData(){
+      if (!daysList.length) return;
+      const endDay = daySel.value || daysList[daysList.length-1];
+      if (!endDay) return;
+
+      if (windowMode === 'MAX'){
+        await ensureDaysLoaded(daysList);
+        return;
+      }
+
+      const span = (windowMode === '1M') ? 30 : 7;
+      const start = addDaysUTC(endDay, -(span-1));
+      const want = rangeDaysUTC(start, endDay).filter(d => daysList.includes(d));
+      await ensureDaysLoaded(want);
+    }
+
+    // ---------- Fast initial load: only latest 7 days ----------
+    async function loadInitialFast7(){
       try{
         daySel.disabled = true;
+
         const list = await fetchCsvDatesFromGitHub();
         if (!list.length){ alert('No YYYY-MM-DD.csv files found in data/ directory'); return; }
-        daysList = [];
-        for (const d of list) {
+
+        daysList = list.slice();
+        renderDayOptions(); // default selects latest day
+
+        // pick latest 7 existing days
+        const latest7 = daysList.slice(-7);
+        // load them so 1W & tooltip trend are ready on first paint
+        for (const d of latest7){
           await fetchDayCsv(d);
-          daysList.push(d);
         }
-        renderDayOptions();
+
         refreshMap();
       }catch(e){
         console.error(e);
@@ -503,11 +533,13 @@
       map.fitBounds(layer.getBounds(), {maxZoom: 10});
       layer.openTooltip();
     }
+
+    // Interactions
     doSearch.addEventListener('click', ()=> focusZip(searchInput.value));
     searchInput.addEventListener('keydown', e=>{ if (e.key==='Enter') focusZip(searchInput.value); });
+    clearBtn.addEventListener('click', ()=> clearFocus());
 
-    // Interactions to refresh map
-    daySel.addEventListener('change', refreshMap);
+    daySel.addEventListener('change', async ()=>{ await ensureWindowData(); refreshMap(); });
     thresholdOn.addEventListener('change', refreshMap);
     thresholdInput.addEventListener('change', refreshMap);
 
@@ -521,14 +553,14 @@
       btn1m.classList.toggle('active', windowMode==='1M');
       btnMax.classList.toggle('active', windowMode==='MAX');
     }
-    btn1w.addEventListener('click', ()=>{ windowMode='1W'; syncRangeButtons(); refreshMap(); });
-    btn1m.addEventListener('click', ()=>{ windowMode='1M'; syncRangeButtons(); refreshMap(); });
-    btnMax.addEventListener('click', ()=>{ windowMode='MAX'; syncRangeButtons(); refreshMap(); });
+    btn1w.addEventListener('click', async ()=>{ windowMode='1W'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
+    btn1m.addEventListener('click', async ()=>{ windowMode='1M'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
+    btnMax.addEventListener('click', async ()=>{ windowMode='MAX'; syncRangeButtons(); await ensureWindowData(); refreshMap(); });
 
-    // On page load, automatically pull CSV list from data/ directory
+    // On page load
     document.addEventListener('DOMContentLoaded', async () => {
       syncRangeButtons();
-      await loadAllFromRepo().catch(e => console.warn('Initial load failed:', e));
+      await loadInitialFast7().catch(e => console.warn('Initial load failed:', e));
     });
   </script>
 </body>
