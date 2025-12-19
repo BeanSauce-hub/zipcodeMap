@@ -329,7 +329,7 @@
     const info = L.control();
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) { this._div.innerHTML = 'Hover over a ZIP area to view data'; return; }
+      if (!props) { this._div.innerHTML = ''; return; }
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
