@@ -8,7 +8,7 @@
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .legend { background: white; padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
-    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size:12px; }
+    .info { padding: 6px 8px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.12); line-height: 1.4; font-size:12px; }
     .panel {
       position: absolute; z-index: 1000; left: 10px; top: 10px;
       background: rgba(255,255,255,.94); padding: 10px 12px; border-radius: 12px;
@@ -17,7 +17,7 @@
     }
     .panel h1 { font-size: 18px; margin: 0 0 6px; }
     .panel .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; }
+    .btn { display:inline-block; padding:6px 10px; border-radius:8px; background:#111; color:#fff; text-decoration:none; cursor:pointer; font-size:12px; user-select:none; }
     .input { padding:6px 8px; border-radius:8px; border:1px solid #ddd; font-size:13px; }
     select{ padding:4px 8px; border-radius:8px; }
     .hint{font-size:12px;color:#666;margin-top:6px;}
@@ -38,6 +38,41 @@
     .bar { height: 10px; background:#eee; border-radius:999px; overflow:hidden; border:1px solid #e0e0e0; display:none; }
     .bar > div { height:100%; width:0%; background:#111; border-radius:999px; transition: width .12s linear; }
     .barText { display:none; margin-top:6px; font-size:12px; color:#555; justify-content:space-between; gap:10px; }
+
+    /* ===== Global bottom cleaning progress ===== */
+    #globalCleanBar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 2000;
+      background: rgba(255,255,255,.96);
+      border-top: 1px solid #e5e5e5;
+      box-shadow: 0 -4px 12px rgba(0,0,0,.06);
+      padding: 8px 14px 10px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      display: none; /* hidden by default */
+    }
+    #globalCleanBar .gcb-inner {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #333;
+      margin-bottom: 6px;
+    }
+    #globalCleanBar .gcb-track {
+      height: 8px;
+      background: #eee;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    #globalCleanBar .gcb-track > div {
+      height: 100%;
+      width: 0%;
+      background: #111;
+      border-radius: 999px;
+      transition: width .12s linear;
+    }
   </style>
 </head>
 <body>
@@ -73,13 +108,23 @@
       <a class="btn" id="btnUploadClean">🧹 Upload &amp; Clean</a>
       <span class="hint" id="cleanFileName" style="margin-top:0;">None</span>
     </div>
-    <div class="cleanWrap">
-      <div class="bar" id="cleanBar"><div id="cleanFill"></div></div>
-      <div class="barText" id="cleanBarText">
-        <span id="cleanLabel">Preparing…</span>
-        <span id="cleanPct">0%</span>
-      </div>
-      <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
+
+    <!-- keep file input in panel, progress is global -->
+    <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
+
+    <div class="hint">
+      Fast load: first loads latest <b>7 days</b>. 1M / MAX loads on demand.
+    </div>
+  </div>
+
+  <!-- Global bottom progress bar -->
+  <div id="globalCleanBar">
+    <div class="gcb-inner">
+      <span id="cleanLabel">Cleaning…</span>
+      <span id="cleanPct">0%</span>
+    </div>
+    <div class="gcb-track">
+      <div id="cleanFill"></div>
     </div>
   </div>
 
@@ -326,10 +371,10 @@
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
     map.zoomControl.setPosition('bottomleft');
 
-    const info = L.control();
+    const info = L.control({ position: 'topright' });
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
-      if (!props) { this._div.innerHTML = ''; return; }
+      if (!props) { this._div.innerHTML = ''; return; }  // ✅ remove initial hint text
       const zip = props.ZCTA5CE10 || props.ZCTA5CE || props.zip || '';
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(zip, cur);
@@ -584,13 +629,13 @@
       layer.openTooltip();
     }
 
-    // ✅ Cleaner UI wiring (kept minimal)
+    // ✅ Cleaner UI wiring (progress moved to bottom)
     const btnUploadClean = document.getElementById('btnUploadClean');
     const cleanPicker = document.getElementById('cleanFilePicker');
     const cleanFileName = document.getElementById('cleanFileName');
-    const cleanBar = document.getElementById('cleanBar');
+
+    const globalCleanBar = document.getElementById('globalCleanBar');
     const cleanFill = document.getElementById('cleanFill');
-    const cleanBarText = document.getElementById('cleanBarText');
     const cleanLabel = document.getElementById('cleanLabel');
     const cleanPct = document.getElementById('cleanPct');
 
@@ -602,8 +647,8 @@
 
       cleanFileName.textContent = f.name;
 
-      cleanBar.style.display = 'block';
-      cleanBarText.style.display = 'flex';
+      // show global bar
+      globalCleanBar.style.display = 'block';
       cleanFill.style.width = '0%';
       cleanLabel.textContent = 'Cleaning…';
       cleanPct.textContent = '0%';
@@ -633,9 +678,12 @@
             cleanPct.textContent = '100%';
             // still UI mock; just confirm we can read & detect ZIP column
             cleanLabel.textContent = `Done • ${zipKey} • ${rows.length}`;
+
+            setTimeout(() => { globalCleanBar.style.display = 'none'; }, 1200);
           }catch(err){
             cleanLabel.textContent = 'Failed';
             alert(err?.message || String(err));
+            setTimeout(() => { globalCleanBar.style.display = 'none'; }, 1200);
           }finally{
             cleanPicker.value = '';
           }
