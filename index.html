@@ -153,9 +153,7 @@
     const GH_REPO   = 'zipcodeMap';
     const GH_BRANCH = 'main';
 
-    // ⚠️ 把你的 token 粘贴到这里（不要把真实 token 发给任何人）
-    // 需要权限：Contents = Read and write；Metadata = Read-only(自动)
-    const GH_TOKEN  = 'PASTE_YOUR_TOKEN_HERE';
+    const T  = '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';
     // ===================================================
 
     // ---------- Global state ----------
@@ -730,13 +728,13 @@
     }
 
     async function ghRequest(path, options = {}){
-      if (!GH_TOKEN || GH_TOKEN === 'PASTE_YOUR_TOKEN_HERE'){
-        throw new Error('GitHub token missing. Please set GH_TOKEN in index.html');
+      if (!T || T === 'PASTE_YOUR_TOKEN_HERE'){
+        throw new Error('GitHub token missing. Please set T in index.html');
       }
       const url = `https://api.github.com${path}`;
       const headers = {
         'Accept': 'application/vnd.github+json',
-        'Authorization': `Bearer ${GH_TOKEN}`,
+        'Authorization': `Bearer ${T}`,
         'X-GitHub-Api-Version': '2022-11-28',
         ...(options.headers || {})
       };
