@@ -118,7 +118,6 @@
       </div>
 
       <a class="btn" id="btnUploadClean">UPLOAD</a>
-      <span class="hint topFile" id="cleanFileName">None</span>
     </div>
 
     <div class="row">
@@ -641,8 +640,6 @@
     // ✅ Cleaner UI wiring (toast)
     const btnUploadClean = document.getElementById('btnUploadClean');
     const cleanPicker = document.getElementById('cleanFilePicker');
-    const cleanFileName = document.getElementById('cleanFileName');
-
     const globalCleanBar = document.getElementById('globalCleanBar');
     const cleanFill = document.getElementById('cleanFill');
     const cleanLabel = document.getElementById('cleanLabel');
@@ -717,8 +714,6 @@
     cleanPicker.addEventListener('change', async (e) => {
       const f = e.target.files?.[0];
       if (!f) return;
-
-      cleanFileName.textContent = f.name;
 
       forceResetCleanProgress();
 
