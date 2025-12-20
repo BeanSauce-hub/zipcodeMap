@@ -60,7 +60,7 @@
       transition: opacity .18s ease; /* 出现可以快一点 */
     }
     #globalCleanBar.fade {
-      opacity: 0;     /* 仅作为状态标记，真正的渐变由 JS 控制 */
+      opacity: 0;
       transition: none;
     }
 
@@ -91,12 +91,22 @@
       border-radius: 999px;
       transition: width .12s linear;
     }
+
+    /* ✅ (新增极小改动) 顶部一行的文件名展示，防止太占空间 */
+    #cleanFileName.topFile {
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 0;
+    }
   </style>
 </head>
 <body>
   <div class="panel">
     <h1>Florida ZIP Volume Map</h1>
 
+    <!-- ✅ Upload & Clean 挪到 MAX 右侧（最小改动：仅移动这一段 HTML） -->
     <div class="row">
       <label>Date:
         <select id="day"></select>
@@ -106,6 +116,9 @@
         <button class="seg" id="btn1m">1M</button>
         <button class="seg" id="btnMax">MAX</button>
       </div>
+
+      <a class="btn" id="btnUploadClean">UPLOAD</a>
+      <span class="hint topFile" id="cleanFileName">None</span>
     </div>
 
     <div class="row">
@@ -121,10 +134,7 @@
       <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
     </div>
 
-    <div class="row">
-      <a class="btn" id="btnUploadClean">🧹 Upload &amp; Clean</a>
-      <span class="hint" id="cleanFileName" style="margin-top:0;">None</span>
-    </div>
+    <!-- ✅ 原先的 Upload&Clean 行已删除（按钮已移动到上面） -->
 
     <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
 
@@ -464,7 +474,7 @@
     }
 
     const legend=L.control({position:'bottomright'});
-    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
+    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return; };
     legend.update=function(){
       const d = daySel.value; const b = breaks[d]||[0,0,0,0];
       const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
@@ -649,7 +659,6 @@
       globalCleanBar.classList.add('show');
       globalCleanBar.style.display = 'block';
 
-      // force reflow so transitions are consistent
       void globalCleanBar.offsetWidth;
       globalCleanBar.style.opacity = '1';
     }
@@ -691,19 +700,15 @@
       fadeOutCleanToastLinear(3000);
     }
 
-    // ✅✅✅ 关键：强制重置进度条（防止 1% 但条很长）
+    // ✅ 强制重置进度条（防止 1% 但条很长）
     function forceResetCleanProgress(){
-      // 1) 先确保 toast 处于可见且不会被上一轮 fade 干扰
       showCleanToast();
-
-      // 2) 重置文字
       cleanLabel.textContent = 'Cleaning…';
       cleanPct.textContent = '0%';
 
-      // 3) 彻底重置 fill：先关 transition，设 0%，强制 reflow，再恢复 transition
       cleanFill.style.transition = 'none';
       cleanFill.style.width = '0%';
-      void cleanFill.offsetWidth; // 强制 layout，确保 0% 真正生效
+      void cleanFill.offsetWidth;
       cleanFill.style.transition = 'width .12s linear';
     }
 
@@ -715,7 +720,6 @@
 
       cleanFileName.textContent = f.name;
 
-      // ✅ 在任何进度更新前，先强制重置（解决你截图的问题）
       forceResetCleanProgress();
 
       const readPromise = (async ()=>{
