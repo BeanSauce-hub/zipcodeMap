@@ -51,13 +51,13 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
       display: none;
       opacity: 0;
-      transition: opacity 3s ease; /* ✅ 3s fade-out */
-      pointer-events: none;        /* 不挡住地图操作 */
+      transition: opacity 3s ease;
+      pointer-events: none;
     }
     #globalCleanBar.show {
       display: block;
       opacity: 1;
-      transition: opacity .18s ease; /* 出现可以快一点 */
+      transition: opacity .18s ease;
     }
     #globalCleanBar.fade {
       opacity: 0;
@@ -91,22 +91,12 @@
       border-radius: 999px;
       transition: width .12s linear;
     }
-
-    /* ✅ (新增极小改动) 顶部一行的文件名展示，防止太占空间 */
-    #cleanFileName.topFile {
-      max-width: 140px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      margin-top: 0;
-    }
   </style>
 </head>
 <body>
   <div class="panel">
     <h1>Florida ZIP Volume Map</h1>
 
-    <!-- ✅ Upload & Clean 挪到 MAX 右侧（最小改动：仅移动这一段 HTML） -->
     <div class="row">
       <label>Date:
         <select id="day"></select>
@@ -133,8 +123,6 @@
       <label class="toggle"><input type="checkbox" id="thresholdOn" /> Enable</label>
     </div>
 
-    <!-- ✅ 原先的 Upload&Clean 行已删除（按钮已移动到上面） -->
-
     <input type="file" id="cleanFilePicker" accept=".csv,.xlsx" style="display:none" />
 
     <div class="hint">
@@ -145,7 +133,7 @@
   <!-- ✅ Small bottom centered toast progress -->
   <div id="globalCleanBar" aria-live="polite">
     <div class="gcb-top">
-      <span class="left" id="cleanLabel">Cleaning…</span>
+      <span class="left" id="cleanLabel">Ready</span>
       <span id="cleanPct">0%</span>
     </div>
     <div class="gcb-track">
@@ -164,6 +152,10 @@
     const GH_OWNER  = 'BeanSauce-hub';
     const GH_REPO   = 'zipcodeMap';
     const GH_BRANCH = 'main';
+
+    // ⚠️ 把你的 token 粘贴到这里（不要把真实 token 发给任何人）
+    // 需要权限：Contents = Read and write；Metadata = Read-only(自动)
+    const GH_TOKEN  = 'PASTE_YOUR_TOKEN_HERE';
     // ===================================================
 
     // ---------- Global state ----------
@@ -209,37 +201,6 @@
       return out;
     }
 
-    // ✅ Cleaner helpers (case-insensitive zipcode/zip/邮编)
-    function _normHeader(h){ return String(h ?? '').trim().toLowerCase().replace(/\s+/g,''); }
-    function findZipKey(headers){
-      const m = new Map();
-      headers.forEach(h => m.set(_normHeader(h), h));
-      const targets = ['zipcode','zip','邮编'];
-      for (const t of targets){ if (m.has(t)) return m.get(t); }
-      for (const [k, orig] of m.entries()){
-        if (k.includes('zipcode')) return orig;
-        if (k === 'zip') return orig;
-        if (k.includes('邮编')) return orig;
-      }
-      return null;
-    }
-    async function readTableFile(file){
-      const ext = (file.name.split('.').pop() || '').toLowerCase();
-      if (ext === 'csv'){
-        const rawText = await file.text();
-        return parseCsv(rawText);
-      }
-      if (ext === 'xlsx'){
-        const ab = await file.arrayBuffer();
-        const wb = XLSX.read(ab, {type:'array'});
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
-        const headers = Object.keys(rows[0] || {});
-        return { headers, rows };
-      }
-      throw new Error('Unsupported file type (.csv / .xlsx only)');
-    }
-
     // ---------- Focus styles ----------
     function applyFocusStyles(){
       if (!geoLayer || !focusedZip) return;
@@ -270,7 +231,7 @@
     }
 
     // ---------- Mini sparkline chart ----------
-    function buildSparklineSVG(zip, currentDay, daysListAllLoadedOrNot) {
+    function buildSparklineSVG(zip, currentDay) {
       const mode = (typeof windowMode === 'string' ? windowMode : '1W');
       const allDays = sortDatesAsc(Object.keys(daily)); // only loaded days
       if (!allDays.length) return "";
@@ -376,7 +337,7 @@
       const valHtml = (val == null || Number.isNaN(val))
         ? '<span style="color:#999">—</span>'
         : `<b style="background:rgba(255,230,150,.6);padding:0 4px;border-radius:4px">${fmt(val)}</b>`;
-      const trend = buildSparklineSVG(zip, currentDay, daysList);
+      const trend = buildSparklineSVG(zip, currentDay);
       return `
         <div><b>ZIP:</b> ${zip}</div>
         <div style="margin-top:4px"><b>${currentDay}</b>: ${valHtml}</div>
@@ -389,7 +350,6 @@
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 12, attribution: '&copy; OpenStreetMap'}).addTo(map);
     map.zoomControl.setPosition('bottomleft');
 
-    // ✅ remove initial hint in the info control (right-top)
     const info = L.control({ position: 'topright' });
     info.onAdd = function(){ this._div = L.DomUtil.create('div','info'); this.update(); return this._div; };
     info.update = function(props){
@@ -637,7 +597,9 @@
       layer.openTooltip();
     }
 
+    // =========================
     // ✅ Cleaner UI wiring (toast)
+    // =========================
     const btnUploadClean = document.getElementById('btnUploadClean');
     const cleanPicker = document.getElementById('cleanFilePicker');
     const globalCleanBar = document.getElementById('globalCleanBar');
@@ -697,10 +659,9 @@
       fadeOutCleanToastLinear(3000);
     }
 
-    // ✅ 强制重置进度条（防止 1% 但条很长）
     function forceResetCleanProgress(){
       showCleanToast();
-      cleanLabel.textContent = 'Cleaning…';
+      cleanLabel.textContent = 'Working…';
       cleanPct.textContent = '0%';
 
       cleanFill.style.transition = 'none';
@@ -709,49 +670,295 @@
       cleanFill.style.transition = 'width .12s linear';
     }
 
+    function setProgress(pct, label){
+      const p = Math.max(0, Math.min(100, Math.round(pct)));
+      cleanFill.style.width = p + '%';
+      cleanPct.textContent = p + '%';
+      if (label != null) cleanLabel.textContent = label;
+    }
+
+    // =========================
+    // ✅ (NEW) Upload pipeline: XLSX -> daily zip counts -> write /data/*.csv to GitHub
+    // =========================
+
+    function isEmptyRow(values){
+      if (!values) return true;
+      for (const v of values){
+        if (v == null) continue;
+        if (typeof v === 'string' && v.trim() === '') continue;
+        return false;
+      }
+      return true;
+    }
+
+    function findColumnIndex(headers, candidates){
+      const norm = (s)=> String(s ?? '').trim();
+      const lower = (s)=> norm(s).toLowerCase();
+      const hs = headers.map(h=>({raw:h, low:lower(h)}));
+      for (const c of candidates){
+        const cl = lower(c);
+        const idx = hs.findIndex(x=>x.low === cl);
+        if (idx !== -1) return idx;
+      }
+      // contains fallback
+      for (const c of candidates){
+        const cl = lower(c);
+        const idx = hs.findIndex(x=>x.low.includes(cl));
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    }
+
+    // parse "中心签入时间": "MM/DD/YYYY HH:MM:SS" or "MM/DD/YYYY HH:MM"
+    function parseCenterTimeToISODate(s){
+      const str = String(s ?? '').trim();
+      if (!str) return null;
+      const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+      if (!m) return null;
+      const mm = String(m[1]).padStart(2,'0');
+      const dd = String(m[2]).padStart(2,'0');
+      const yyyy = m[3];
+      return `${yyyy}-${mm}-${dd}`; // date only (like Python dt.date)
+    }
+
+    function toBase64Utf8(text){
+      // base64 for UTF-8 string
+      const utf8 = new TextEncoder().encode(text);
+      let bin = '';
+      utf8.forEach(b => bin += String.fromCharCode(b));
+      return btoa(bin);
+    }
+
+    async function ghRequest(path, options = {}){
+      if (!GH_TOKEN || GH_TOKEN === 'PASTE_YOUR_TOKEN_HERE'){
+        throw new Error('GitHub token missing. Please set GH_TOKEN in index.html');
+      }
+      const url = `https://api.github.com${path}`;
+      const headers = {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${GH_TOKEN}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(options.headers || {})
+      };
+      const res = await fetch(url, { ...options, headers });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch { /* ignore */ }
+      if (!res.ok){
+        const msg = (json && (json.message || json.error)) ? (json.message || json.error) : text;
+        throw new Error(`GitHub API ${res.status}: ${msg}`);
+      }
+      return json;
+    }
+
+    async function getExistingFileSha(repoPath){
+      // GET /repos/{owner}/{repo}/contents/{path}?ref=branch
+      try{
+        const j = await ghRequest(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(repoPath)}?ref=${encodeURIComponent(GH_BRANCH)}`, {
+          method: 'GET'
+        });
+        // file object has sha
+        return j && j.sha ? j.sha : null;
+      }catch(e){
+        // if 404 -> no file
+        if (String(e.message || '').includes('404')) return null;
+        // GitHub sometimes returns 404 in msg; be defensive:
+        if (String(e.message || '').includes('Not Found')) return null;
+        throw e;
+      }
+    }
+
+    async function putFileToGitHub(repoPath, contentText, commitMessage){
+      const sha = await getExistingFileSha(repoPath);
+      const body = {
+        message: commitMessage,
+        content: toBase64Utf8(contentText),
+        branch: GH_BRANCH
+      };
+      if (sha) body.sha = sha;
+
+      await ghRequest(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(repoPath)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      });
+    }
+
+    function buildDailyZipCountsFromXlsx(array2d){
+      // array2d: [ [header...], [row...], ... ]
+      if (!array2d || array2d.length < 2) throw new Error('Excel seems empty.');
+
+      const headers = (array2d[0] || []).map(h => String(h ?? '').trim());
+      const zipIdx = findColumnIndex(headers, ['邮编', 'zipcode', 'zip', 'zip_code', 'zipcodes']);
+      const timeIdx = findColumnIndex(headers, ['中心签入时间', 'center check-in time', 'checkin', 'check-in']);
+
+      if (zipIdx === -1) throw new Error('ZIP column not found (expected: 邮编 / zipcode / zip).');
+      if (timeIdx === -1) throw new Error('Time column not found (expected: 中心签入时间).');
+
+      const counts = new Map(); // date -> Map(zip -> count)
+
+      let emptyStreak = 0;
+      const TAIL_BREAK = 200;
+
+      for (let i=1; i<array2d.length; i++){
+        const row = array2d[i];
+        if (isEmptyRow(row)){
+          emptyStreak++;
+          if (emptyStreak >= TAIL_BREAK) break;
+          continue;
+        }
+        emptyStreak = 0;
+
+        const zipRaw = row[zipIdx];
+        const timeRaw = row[timeIdx];
+
+        const dateISO = parseCenterTimeToISODate(timeRaw);
+        if (!dateISO) continue;
+
+        const zip = String(zipRaw ?? '').trim();
+        if (!zip) continue;
+
+        if (!counts.has(dateISO)) counts.set(dateISO, new Map());
+        const m = counts.get(dateISO);
+        m.set(zip, (m.get(zip) || 0) + 1);
+      }
+
+      if (!counts.size) throw new Error('No valid rows after parsing dates.');
+
+      return counts;
+    }
+
+    function buildCsvForOneDay(zipCountMap){
+      // output columns compatible with your loader: zipcodes + quantity
+      const rows = [];
+      for (const [zip, qty] of zipCountMap.entries()){
+        // keep original string but normalize to 5 digits for consistency
+        const z = normZip(zip);
+        if (!z || z === '00000') continue;
+        rows.push([z, qty]);
+      }
+      rows.sort((a,b)=> a[0].localeCompare(b[0]));
+      let csv = 'zipcodes,quantity\n';
+      for (const [z, q] of rows){
+        csv += `${z},${q}\n`;
+      }
+      return csv;
+    }
+
+    async function refreshDaysListFromRepo(){
+      const list = await fetchCsvDatesFromGitHub();
+      daysList = list.slice();
+      renderDayOptions();
+    }
+
     btnUploadClean.addEventListener('click', ()=> cleanPicker.click());
 
     cleanPicker.addEventListener('change', async (e) => {
       const f = e.target.files?.[0];
       if (!f) return;
 
-      forceResetCleanProgress();
+      try{
+        forceResetCleanProgress();
+        setProgress(2, 'Reading file…');
 
-      const readPromise = (async ()=>{
-        const { headers, rows } = await readTableFile(f);
-        const zipKey = findZipKey(headers);
-        if (!zipKey) throw new Error('ZIP column not found (zipcode / ZIP / 邮编)');
-        return { rows, zipKey };
-      })();
+        const ext = (f.name.split('.').pop() || '').toLowerCase();
 
-      const t0 = performance.now();
-      const DURATION = 1800;
+        let dailyCounts = null;
 
-      const tick = async () => {
-        const t = performance.now();
-        const p = Math.min(99, Math.round(((t - t0) / DURATION) * 100));
-        cleanFill.style.width = p + '%';
-        cleanPct.textContent = p + '%';
+        if (ext === 'xlsx'){
+          const ab = await f.arrayBuffer();
+          setProgress(10, 'Parsing XLSX…');
+          const wb = XLSX.read(ab, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const array2d = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+          setProgress(18, 'Building daily ZIP counts…');
+          dailyCounts = buildDailyZipCountsFromXlsx(array2d);
+        } else if (ext === 'csv'){
+          const text = await f.text();
+          setProgress(10, 'Parsing CSV…');
+          const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+          const headers = parsed.meta.fields || [];
 
-        if (p < 99) requestAnimationFrame(tick);
-        else {
-          try{
-            const { rows, zipKey } = await readPromise;
+          const zipKey = (()=>{
+            const lowers = headers.map(h=>String(h||'').trim().toLowerCase());
+            const idx = lowers.indexOf('邮编') !== -1 ? lowers.indexOf('邮编')
+              : (lowers.indexOf('zipcode') !== -1 ? lowers.indexOf('zipcode')
+              : (lowers.indexOf('zip') !== -1 ? lowers.indexOf('zip') : -1));
+            return idx === -1 ? null : headers[idx];
+          })();
 
-            cleanFill.style.width = '100%';
-            cleanPct.textContent = '100%';
-            cleanLabel.textContent = `Done • ${zipKey} • ${rows.length}`;
-            fadeOutCleanToast();
-          }catch(err){
-            cleanLabel.textContent = 'Failed';
-            alert(err?.message || String(err));
-            fadeOutCleanToast();
-          }finally{
-            cleanPicker.value = '';
+          const timeKey = (()=>{
+            const lowers = headers.map(h=>String(h||'').trim().toLowerCase());
+            const idx = lowers.indexOf('中心签入时间') !== -1 ? lowers.indexOf('中心签入时间') : -1;
+            return idx === -1 ? null : headers[idx];
+          })();
+
+          if (!zipKey) throw new Error('CSV missing ZIP column (expected: 邮编/zipcode/zip).');
+          if (!timeKey) throw new Error('CSV missing time column (expected: 中心签入时间).');
+
+          dailyCounts = new Map();
+          setProgress(18, 'Building daily ZIP counts…');
+
+          let emptyStreak = 0;
+          const TAIL_BREAK = 200;
+          for (const r of parsed.data){
+            const rowVals = Object.values(r);
+            if (isEmptyRow(rowVals)){
+              emptyStreak++;
+              if (emptyStreak >= TAIL_BREAK) break;
+              continue;
+            }
+            emptyStreak = 0;
+
+            const dateISO = parseCenterTimeToISODate(r[timeKey]);
+            if (!dateISO) continue;
+            const zip = String(r[zipKey] ?? '').trim();
+            if (!zip) continue;
+
+            if (!dailyCounts.has(dateISO)) dailyCounts.set(dateISO, new Map());
+            const m = dailyCounts.get(dateISO);
+            m.set(zip, (m.get(zip) || 0) + 1);
           }
+
+          if (!dailyCounts.size) throw new Error('No valid rows after parsing CSV dates.');
+        } else {
+          throw new Error('Unsupported file type. Please upload .xlsx or .csv');
         }
-      };
-      requestAnimationFrame(tick);
+
+        const dates = Array.from(dailyCounts.keys()).sort((a,b)=>a.localeCompare(b));
+        setProgress(25, `Uploading ${dates.length} file(s)…`);
+
+        // upload sequentially (safe + simplest)
+        const total = dates.length;
+        let done = 0;
+
+        for (const day of dates){
+          const csv = buildCsvForOneDay(dailyCounts.get(day));
+          const repoPath = `data/${day}.csv`;
+          const msg = `Upload daily ZIP counts for ${day}`;
+          await putFileToGitHub(repoPath, csv, msg);
+
+          done++;
+          const pct = 25 + (done/total)*70; // 25%~95%
+          setProgress(pct, `Uploaded ${done}/${total} • ${day}`);
+        }
+
+        setProgress(98, 'Refreshing file list…');
+        await refreshDaysListFromRepo();
+
+        // Optional: clear caches so a later switch reloads
+        loadedDays.clear();
+        // NOTE: Pages deployment may lag; your site ./data may not reflect immediately.
+        setProgress(100, 'Done • GitHub updated (Pages may take a moment)');
+        fadeOutCleanToast();
+
+      }catch(err){
+        console.error(err);
+        setProgress(100, 'Failed');
+        alert(err?.message || String(err));
+        fadeOutCleanToast();
+      }finally{
+        cleanPicker.value = '';
+      }
     });
 
     // Interactions
