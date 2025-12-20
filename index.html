@@ -474,7 +474,7 @@
     }
 
     const legend=L.control({position:'bottomright'});
-    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return; };
+    legend.onAdd=function(map){ this._div=L.DomUtil.create('div','legend'); this.update(); return this._div; };
     legend.update=function(){
       const d = daySel.value; const b = breaks[d]||[0,0,0,0];
       const colors = ['#ffffcc','#ffeda0','#feb24c','#fd8d3c','#e31a1c'];
