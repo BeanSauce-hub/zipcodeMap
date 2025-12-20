@@ -274,7 +274,6 @@
         const start = addDaysUTC(endDay, -(span - 1));
         fullDays = rangeDaysUTC(start, endDay);
       } else {
-        // MAX: show only loaded range (will expand as you load more)
         fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
       }
 
@@ -640,56 +639,72 @@
     const cleanPct = document.getElementById('cleanPct');
 
     let hideTimer = null;
+    let fadeRAF = null;
 
     function showCleanToast(){
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      if (fadeRAF) { cancelAnimationFrame(fadeRAF); fadeRAF = null; }
+
       globalCleanBar.classList.remove('fade');
       globalCleanBar.classList.add('show');
       globalCleanBar.style.display = 'block';
+
       // force reflow so transitions are consistent
       void globalCleanBar.offsetWidth;
       globalCleanBar.style.opacity = '1';
     }
 
-    let fadeRAF = null;
-
     function fadeOutCleanToastLinear(durationMs = 3000){
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (fadeRAF) { cancelAnimationFrame(fadeRAF); fadeRAF = null; }
-    
+
       globalCleanBar.classList.remove('show');
       globalCleanBar.classList.add('fade');
-    
-      // 确保从当前可见状态开始
+
       globalCleanBar.style.display = 'block';
       globalCleanBar.style.opacity = '1';
-    
+
       const t0 = performance.now();
       const startOpacity = 1;
       const endOpacity = 0;
-    
+
       const step = (now) => {
         const t = (now - t0) / durationMs;
         const clamped = Math.min(1, Math.max(0, t));
-        const cur = startOpacity + (endOpacity - startOpacity) * clamped; // 线性插值
+        const cur = startOpacity + (endOpacity - startOpacity) * clamped;
         globalCleanBar.style.opacity = String(cur);
-    
+
         if (clamped < 1) {
           fadeRAF = requestAnimationFrame(step);
         } else {
           fadeRAF = null;
           globalCleanBar.style.display = 'none';
           globalCleanBar.classList.remove('fade');
-          globalCleanBar.style.opacity = ''; // 清理 inline，避免下次显示异常
+          globalCleanBar.style.opacity = '';
         }
       };
-    
+
       fadeRAF = requestAnimationFrame(step);
     }
-    
-    // ✅ 用这个替代你原来的 fadeOutCleanToast()
+
     function fadeOutCleanToast(){
       fadeOutCleanToastLinear(3000);
+    }
+
+    // ✅✅✅ 关键：强制重置进度条（防止 1% 但条很长）
+    function forceResetCleanProgress(){
+      // 1) 先确保 toast 处于可见且不会被上一轮 fade 干扰
+      showCleanToast();
+
+      // 2) 重置文字
+      cleanLabel.textContent = 'Cleaning…';
+      cleanPct.textContent = '0%';
+
+      // 3) 彻底重置 fill：先关 transition，设 0%，强制 reflow，再恢复 transition
+      cleanFill.style.transition = 'none';
+      cleanFill.style.width = '0%';
+      void cleanFill.offsetWidth; // 强制 layout，确保 0% 真正生效
+      cleanFill.style.transition = 'width .12s linear';
     }
 
     btnUploadClean.addEventListener('click', ()=> cleanPicker.click());
@@ -700,10 +715,8 @@
 
       cleanFileName.textContent = f.name;
 
-      showCleanToast();
-      cleanFill.style.width = '0%';
-      cleanLabel.textContent = 'Cleaning…';
-      cleanPct.textContent = '0%';
+      // ✅ 在任何进度更新前，先强制重置（解决你截图的问题）
+      forceResetCleanProgress();
 
       const readPromise = (async ()=>{
         const { headers, rows } = await readTableFile(f);
@@ -729,11 +742,11 @@
             cleanFill.style.width = '100%';
             cleanPct.textContent = '100%';
             cleanLabel.textContent = `Done • ${zipKey} • ${rows.length}`;
-            fadeOutCleanToast();  // ✅ 3s fade-out
+            fadeOutCleanToast();
           }catch(err){
             cleanLabel.textContent = 'Failed';
             alert(err?.message || String(err));
-            fadeOutCleanToast();  // ✅ 3s fade-out
+            fadeOutCleanToast();
           }finally{
             cleanPicker.value = '';
           }
