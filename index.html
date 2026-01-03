@@ -588,14 +588,23 @@
 
     info.onAdd = function(){
       this._div = L.DomUtil.create('div','info');
+    
+      // ✅ 让右上角窗口内部的鼠标事件不影响地图
+      L.DomEvent.disableClickPropagation(this._div);
+      L.DomEvent.disableScrollPropagation(this._div);
+    
       this.renderPinned();
       return this._div;
     };
+
 
     info.renderPinned = function(){
       if (!pinnedZip) { this._div.innerHTML = ''; return; }
       const cur = daySel.value;
       this._div.innerHTML = buildTooltipHTML(pinnedZip, cur);
+    
+      // ✅ 关键：DOM 插入后再绑定 Google-like hover
+      requestAnimationFrame(() => wireSparklineHover(this._div));
     };
 
     info.setPinned = function(zip){
