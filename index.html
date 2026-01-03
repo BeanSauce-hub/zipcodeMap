@@ -91,6 +91,50 @@
       border-radius: 999px;
       transition: width .12s linear;
     }
+
+    /* ===== Google-like sparkline UI ===== */
+    .sparkline { margin-top: 6px; }
+    .spark-wrap{
+      position: relative;
+      width: 300px;   /* 跟你 W 一致 */
+      height: 100px;  /* 跟你 H 一致 */
+      user-select: none;
+    }
+    
+    .spark-tipbox{
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.96);
+      border: 1px solid #e5e5e5;
+      box-shadow: 0 8px 20px rgba(0,0,0,.10);
+      font-size: 12px;
+      line-height: 1.15;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translateY(-2px);
+      transition: opacity .12s ease, transform .12s ease;
+      pointer-events: none;
+    }
+    .spark-tipbox.show{
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .spark-tip-date{
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 3px;
+    }
+    .spark-tip-val{
+      font-size: 12px;
+      color: #111;
+    }
+    .spark-tip-val b{
+      font-weight: 700;
+      color: #d62728; /* 红色强调值 */
+    }
   </style>
 </head>
 <body>
@@ -232,10 +276,13 @@
       const mode = (typeof windowMode === 'string' ? windowMode : '1W');
       const allDays = sortDatesAsc(Object.keys(daily)); // only loaded days
       if (!allDays.length) return "";
-
-      const endDay = (currentDay && daysList.includes(currentDay)) ? currentDay : (daysList[daysList.length - 1] || allDays[allDays.length - 1]);
+    
+      const endDay = (currentDay && daysList.includes(currentDay))
+        ? currentDay
+        : (daysList[daysList.length - 1] || allDays[allDays.length - 1]);
+    
       const span = (mode === '1W') ? 7 : (mode === '1M') ? 30 : null;
-
+    
       let fullDays;
       if (span) {
         const start = addDaysUTC(endDay, -(span - 1));
@@ -243,38 +290,60 @@
       } else {
         fullDays = rangeDaysUTC(allDays[0], allDays[allDays.length - 1]);
       }
-
+    
       const vals = fullDays.map(d => {
         const v = daily[d]?.[zip];
         return (v == null || Number.isNaN(v)) ? null : Number(v);
       });
-
+    
       const valid = vals.filter(v => v != null);
       if (valid.length < 2) return "";
-
+    
       const minV = 0;
       const maxData = Math.max(...valid, 0);
       const maxV = maxData * 1.05 || 1;
-
+    
       const W = 300, H = 100;
       const GUTTER_LEFT = 56;
       const PAD_X = 14, PAD_Y = 18;
+    
       const plotX0 = GUTTER_LEFT + PAD_X;
       const plotX1 = W - PAD_X - 6;
       const plotW  = plotX1 - plotX0;
-
+      const baseY  = H - PAD_Y;
+    
       const xs = fullDays.map((_, i) =>
         plotX0 + (i * plotW / Math.max(1, fullDays.length - 1))
       );
-      const yScale = v => H - PAD_Y - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
-
-      const points = vals.map((v,i) => v==null ? null : ({ x: xs[i], y: yScale(v) }));
-      let d = "";
-      for (let i=0;i<points.length;i++){
-        const p = points[i]; if (!p) continue;
-        if (i===0 || !points[i-1]) d += `M ${p.x} ${p.y}`; else d += ` L ${p.x} ${p.y}`;
+      const step = (fullDays.length <= 1) ? 0 : (plotW / (fullDays.length - 1));
+    
+      const yScale = v => baseY - ((v - minV) / (maxV - minV)) * (H - 2 * PAD_Y);
+    
+      const ys = vals.map(v => (v == null ? null : yScale(v)));
+    
+      // line path
+      let lineD = "";
+      for (let i=0;i<xs.length;i++){
+        if (ys[i] == null) continue;
+        if (i===0 || ys[i-1] == null) lineD += `M ${xs[i]} ${ys[i]}`;
+        else lineD += ` L ${xs[i]} ${ys[i]}`;
       }
-
+    
+      // area path (fill under line) — Google-like red tint
+      // 做法：从第一个有效点开始画到最后一个有效点，然后下到 baseline，再闭合
+      let firstIdx = ys.findIndex(v => v != null);
+      let lastIdx = -1;
+      for (let i=ys.length-1;i>=0;i--){ if (ys[i]!=null){ lastIdx=i; break; } }
+      if (firstIdx === -1 || lastIdx === -1) return "";
+    
+      let areaD = `M ${xs[firstIdx]} ${baseY}`;
+      for (let i=firstIdx;i<=lastIdx;i++){
+        if (ys[i] == null) continue;
+        areaD += ` L ${xs[i]} ${ys[i]}`;
+      }
+      areaD += ` L ${xs[lastIdx]} ${baseY} Z`;
+    
+      // X labels（你原逻辑保留）
       const wantLabelIdx = [];
       if (mode === '1W') {
         for (let i=0; i<fullDays.length; i++) wantLabelIdx.push(i);
@@ -290,23 +359,25 @@
         }
         const MAX_TICKS = 8;
         if (wantLabelIdx.length > MAX_TICKS) {
-          const step = Math.ceil(wantLabelIdx.length / MAX_TICKS);
+          const step2 = Math.ceil(wantLabelIdx.length / MAX_TICKS);
           const slim = [];
-          for (let i=0;i<wantLabelIdx.length;i+=step) slim.push(wantLabelIdx[i]);
+          for (let i=0;i<wantLabelIdx.length;i+=step2) slim.push(wantLabelIdx[i]);
           wantLabelIdx.length = 0; wantLabelIdx.push(...slim);
         }
       }
-
+    
       const fmtTick = (iso) => {
         const m = parseInt(iso.slice(5,7), 10);
         const dd = parseInt(iso.slice(8,10), 10);
         if (dd === 1) return `${m}-1`;
         return `${dd}`;
       };
+    
       const xLabels = wantLabelIdx.map(i =>
         `<text x="${xs[i]}" y="${H-4}" text-anchor="middle" font-size="10" fill="#555">${fmtTick(fullDays[i])}</text>`
       ).join("");
-
+    
+      // y guides（你原逻辑保留）
       const minY = yScale(minV), maxY = yScale(maxData);
       const guides = `
         <line x1="${plotX0}" y1="${minY}" x2="${plotX1}" y2="${minY}" stroke="#eee"/>
@@ -316,17 +387,182 @@
         <text x="${GUTTER_LEFT - 6}" y="${minY + 3}" text-anchor="end" font-size="10"
               style="paint-order: stroke; stroke-width: 3px; stroke: #fff;" fill="#666">0</text>
       `;
-
+    
+      // 把 hover 需要的数据塞进去（xs/ys/days/vals）
+      const daysJson = JSON.stringify(fullDays);
+      const valsJson = JSON.stringify(vals);
+      const xsJson   = JSON.stringify(xs);
+      const ysJson   = JSON.stringify(ys);
+    
       return `
         <div class="sparkline">
-          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-            <line x1="${plotX0}" y1="${H - PAD_Y}" x2="${plotX1}" y2="${H - PAD_Y}" stroke="#ccc"/>
-            ${guides}
-            <path d="${d}" fill="none" stroke="#d62728" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            ${xLabels}
-          </svg>
+          <div class="spark-wrap">
+            <div class="spark-tipbox" data-tip="1">
+              <div class="spark-tip-date" data-tip-date>—</div>
+              <div class="spark-tip-val" data-tip-val>—</div>
+            </div>
+    
+            <svg
+              width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+              data-spark="1"
+              data-days='${daysJson}'
+              data-vals='${valsJson}'
+              data-xs='${xsJson}'
+              data-ys='${ysJson}'
+              data-x0="${plotX0}"
+              data-x1="${plotX1}"
+              data-basey="${baseY}"
+              data-step="${step}"
+            >
+              <line x1="${plotX0}" y1="${baseY}" x2="${plotX1}" y2="${baseY}" stroke="#ccc"/>
+              ${guides}
+    
+              <!-- ✅ 红色面积填充（折线以下红色） -->
+              <path d="${areaD}" fill="rgba(214,39,40,.18)" stroke="none"></path>
+    
+              <!-- ✅ 红色折线 -->
+              <path d="${lineD}" fill="none" stroke="#d62728" stroke-width="2"
+                    stroke-linejoin="round" stroke-linecap="round"></path>
+    
+              ${xLabels}
+    
+              <!-- 捕获鼠标 -->
+              <rect class="spark-overlay"
+                    x="${plotX0}" y="${PAD_Y}" width="${plotW}" height="${H - 2*PAD_Y}"
+                    fill="transparent" style="pointer-events:all; cursor:crosshair;"></rect>
+    
+              <!-- ✅ 竖虚线（Google-like） -->
+              <line class="spark-vline" x1="${plotX0}" y1="${PAD_Y}" x2="${plotX0}" y2="${baseY}"
+                    stroke="#111" stroke-width="1" stroke-dasharray="3 3"
+                    style="opacity:0; pointer-events:none;"></line>
+    
+              <!-- ✅ 吸附圆点 -->
+              <circle class="spark-dot" cx="${plotX0}" cy="${baseY}" r="3.2"
+                      fill="#fff" stroke="#d62728" stroke-width="2"
+                      style="opacity:0; pointer-events:none;"></circle>
+            </svg>
+          </div>
         </div>
       `;
+    }
+
+    function wireSparklineHover(rootEl){
+      if (!rootEl) return;
+    
+      const svg = rootEl.querySelector('svg[data-spark="1"]');
+      if (!svg || svg.__wired) return;
+      svg.__wired = true;
+    
+      const wrap = rootEl.querySelector('.spark-wrap');
+      const tipBox = rootEl.querySelector('[data-tip="1"]');
+      const tipDate = rootEl.querySelector('[data-tip-date]');
+      const tipVal  = rootEl.querySelector('[data-tip-val]');
+    
+      const days = JSON.parse(svg.getAttribute('data-days') || '[]');
+      const vals = JSON.parse(svg.getAttribute('data-vals') || '[]');
+      const xs   = JSON.parse(svg.getAttribute('data-xs') || '[]');
+      const ys   = JSON.parse(svg.getAttribute('data-ys') || '[]');
+    
+      const x0 = Number(svg.getAttribute('data-x0'));
+      const x1 = Number(svg.getAttribute('data-x1'));
+      const baseY = Number(svg.getAttribute('data-basey'));
+      const step = Number(svg.getAttribute('data-step')) || 0;
+    
+      const overlay = svg.querySelector('.spark-overlay');
+      const vline   = svg.querySelector('.spark-vline');
+      const dot     = svg.querySelector('.spark-dot');
+    
+      if (!overlay || !vline || !dot || !wrap || !tipBox || !tipDate || !tipVal) return;
+    
+      const clamp = (v, a, b)=> Math.max(a, Math.min(b, v));
+    
+      function idxFromX(x){
+        if (!xs.length) return 0;
+        if (step <= 0) return 0;
+        return clamp(Math.round((x - x0) / step), 0, xs.length - 1);
+      }
+    
+      function setHover(i){
+        i = clamp(i, 0, days.length - 1);
+    
+        const day = days[i];
+        const v = vals[i];
+        const x = xs[i] ?? x0;
+        const y = (ys[i] == null ? baseY : ys[i]);
+    
+        // 竖虚线
+        vline.setAttribute('x1', x);
+        vline.setAttribute('x2', x);
+        vline.style.opacity = '1';
+    
+        // 圆点（如果当天缺值就隐藏）
+        if (v == null || Number.isNaN(v)){
+          dot.style.opacity = '0';
+        } else {
+          dot.setAttribute('cx', x);
+          dot.setAttribute('cy', y);
+          dot.style.opacity = '1';
+        }
+    
+        // tooltip 内容（Google 两行：日期 / 值）
+        tipDate.textContent = day;
+        tipVal.innerHTML = (v == null || Number.isNaN(v))
+          ? '—'
+          : `<b>${fmt(v)}</b>`;
+    
+        // tooltip 定位：靠近圆点上方，防止出界
+        const wrapRect = wrap.getBoundingClientRect();
+        const svgRect  = svg.getBoundingClientRect();
+    
+        // x/y 转成相对 wrap 的坐标
+        const px = (x / 300) * wrapRect.width; // 你 W=300 固定，这样最稳
+        const py = (y / 100) * wrapRect.height;
+    
+        tipBox.classList.add('show');
+        tipBox.style.opacity = '1';
+    
+        // 先放上去再读宽高（更准）
+        tipBox.style.left = '0px';
+        tipBox.style.top = '0px';
+        const tipW = tipBox.offsetWidth;
+        const tipH = tipBox.offsetHeight;
+    
+        let left = px + 10;
+        let top  = py - tipH - 10;
+    
+        // 不要超出边界
+        left = clamp(left, 6, wrapRect.width - tipW - 6);
+        top  = clamp(top, 6, wrapRect.height - tipH - 6);
+    
+        tipBox.style.left = left + 'px';
+        tipBox.style.top  = top + 'px';
+      }
+    
+      function getLocalX(evt){
+        const r = svg.getBoundingClientRect();
+        const x = ((evt.clientX - r.left) / r.width) * 300; // SVG 坐标
+        return clamp(x, x0, x1);
+      }
+    
+      overlay.addEventListener('mousemove', (evt) => {
+        if (!days.length) return;
+        const x = getLocalX(evt);
+        const i = idxFromX(x);
+        setHover(i);
+      });
+    
+      overlay.addEventListener('mouseenter', (evt) => {
+        const x = getLocalX(evt);
+        const i = idxFromX(x);
+        setHover(i);
+      });
+    
+      overlay.addEventListener('mouseleave', () => {
+        vline.style.opacity = '0';
+        dot.style.opacity = '0';
+        tipBox.classList.remove('show');
+        tipBox.style.opacity = '0';
+      });
     }
 
     function buildTooltipHTML(zip, currentDay) {
